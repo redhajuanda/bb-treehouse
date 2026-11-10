@@ -16,7 +16,7 @@ export function BranchPicker({
   rpc: Rpc;
   environmentId: string;
   repo: string;
-  value: string;
+  value: string | null;
   onChange: (branch: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -57,7 +57,11 @@ export function BranchPicker({
     const needle = query.trim().toLowerCase();
     const all = (list?.branches ?? []).filter((b) => b.name !== list?.current);
     const hits = needle === "" ? all : all.filter((b) => b.name.toLowerCase().includes(needle));
-    hits.sort((a, b) => Number(a.remote) - Number(b.remote));
+    hits.sort(
+      (a, b) =>
+        Number(b.name === list?.defaultBase) - Number(a.name === list?.defaultBase) ||
+        Number(a.remote) - Number(b.remote),
+    );
     return hits.slice(0, MAX_SHOWN);
   }, [list, query]);
 
@@ -96,12 +100,17 @@ export function BranchPicker({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={`Compare with ${value}`}
+        title={value === null ? "Pick a branch to compare with" : `Compare with ${value}`}
         onClick={() => setOpen((o) => !o)}
-        className="flex h-6 max-w-[200px] items-center gap-1 rounded-full bg-secondary pl-2 pr-1.5 font-mono text-xs text-secondary-foreground hover:bg-state-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className={cn(
+          "flex h-6 max-w-[200px] items-center gap-1 rounded-full pl-2 pr-1.5 text-xs hover:bg-state-hover focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          value === null
+            ? "border border-dashed border-border text-muted-foreground hover:text-foreground"
+            : "bg-secondary font-mono text-secondary-foreground",
+        )}
       >
-        <Icon name="GitBranch" className="size-3 shrink-0 text-muted-foreground" />
-        <span className="truncate">{value}</span>
+        {value === null ? null : <Icon name="GitBranch" className="size-3 shrink-0 text-muted-foreground" />}
+        <span className="truncate">{value ?? "Pick a branch"}</span>
         <Icon name="ChevronDown" className="size-3 shrink-0 text-muted-foreground" />
       </button>
       {open ? (
@@ -145,7 +154,7 @@ export function BranchPicker({
                   />
                   <span className="min-w-0 flex-1 truncate font-mono text-xs">{branch.name}</span>
                   {branch.name === list.defaultBase ? (
-                    <span className="shrink-0 rounded bg-secondary px-1 text-xs text-muted-foreground">default</span>
+                    <span className="shrink-0 rounded bg-secondary px-1 text-xs text-muted-foreground">main</span>
                   ) : null}
                   <Icon
                     name="Check"

@@ -64,7 +64,6 @@ type CompareState =
 
 const compareOpenByEnv = new Map<string, Map<string, boolean>>();
 const compareBaseByEnv = new Map<string, Map<string, string>>();
-const compareDefaultsCache = new Map<string, Map<string, string | null>>();
 const compareDataCache = new Map<string, Map<string, CompareState>>();
 
 interface Selected {
@@ -239,30 +238,19 @@ export function GitView({
   const [compareBase, setCompareBase] = useState<Map<string, string>>(
     () => compareBaseByEnv.get(environmentId) ?? new Map(),
   );
-  const [compareDefaults, setCompareDefaults] = useCachedState(
-    compareDefaultsCache,
-    environmentId,
-    () => new Map<string, string | null>(),
-  );
   const [compareData, setCompareData] = useCachedState(
     compareDataCache,
     environmentId,
     () => new Map<string, CompareState>(),
   );
 
-  const isCompareOpen = useCallback(
-    (repo: string, status: Repo) => compareOpen.get(repo) ?? status.files.length === 0,
-    [compareOpen],
-  );
-  const baseFor = useCallback(
-    (repo: string) => compareBase.get(repo) ?? compareDefaults.get(repo) ?? null,
-    [compareBase, compareDefaults],
-  );
+  const isCompareOpen = useCallback((repo: string) => compareOpen.get(repo) ?? false, [compareOpen]);
+  const baseFor = useCallback((repo: string) => compareBase.get(repo) ?? null, [compareBase]);
 
   const compareTargets = useMemo(
     () =>
       visibleRepos
-        .filter(({ repo, status }) => isExpanded(repo, status) && isCompareOpen(repo, status))
+        .filter(({ repo, status }) => isExpanded(repo, status) && isCompareOpen(repo))
         .map(({ repo, status }) => ({ repo, head: `${status.branch ?? ""}:${status.ahead}:${status.behind}` })),
     [visibleRepos, isExpanded, isCompareOpen],
   );
@@ -272,23 +260,7 @@ export function GitView({
     let cancelled = false;
     for (const { repo } of compareTargets) {
       const base = baseFor(repo);
-      if (base === null) {
-        if (compareDefaults.has(repo)) continue;
-        setCompareDefaults((prev) => new Map(prev).set(repo, null));
-        rpc.call("branches", { environmentId, repo }).then(
-          (list) => {
-            if (cancelled) return;
-            setCompareDefaults((prev) => new Map(prev).set(repo, list.defaultBase));
-            if (list.defaultBase === null) {
-              setCompareData((prev) =>
-                new Map(prev).set(repo, { status: "error", base: "", message: "No main branch found; pick one." }),
-              );
-            }
-          },
-          () => undefined,
-        );
-        continue;
-      }
+      if (base === null) continue;
       setCompareData((prev) => {
         const current = prev.get(repo);
         if (current !== undefined && current.base === base && current.status !== "error") return prev;
@@ -374,17 +346,14 @@ export function GitView({
         if (isCollapsed) continue;
         for (const change of list) out.push({ kind: "file", repo, section, change });
       }
-      const compareIsOpen = isCompareOpen(repo, status);
       const base = baseFor(repo);
+      const compareIsOpen = base !== null && isCompareOpen(repo);
       const state = compareData.get(repo);
       out.push({ kind: "compare", repo, base, open: compareIsOpen, state: state?.base === base ? state : undefined });
       if (!compareIsOpen) continue;
-      if (state === undefined || base === null || state.base !== base || state.status === "loading") {
-        if (state?.status === "error" && base === null) {
-          out.push({ kind: "compare-note", repo, text: state.message, tone: "muted" });
-        } else {
-          out.push({ kind: "compare-note", repo, text: "Comparing…", tone: "muted" });
-        }
+      if (base === null) continue;
+      if (state === undefined || state.base !== base || state.status === "loading") {
+        out.push({ kind: "compare-note", repo, text: "Comparing…", tone: "muted" });
         continue;
       }
       if (state.status === "error") {
@@ -1157,9 +1126,11 @@ function CompareHeader({
       role="button"
       tabIndex={0}
       aria-expanded={open}
-      onClick={() => onToggle(repo, open)}
+      onClick={() => {
+        if (base !== null) onToggle(repo, open);
+      }}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
+        if (base !== null && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
           onToggle(repo, open);
         }
@@ -1168,14 +1139,18 @@ function CompareHeader({
     >
       <RepoGuide repo={repo} />
       <span className="ml-6 flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground">
-        <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0" />
+        {base === null ? (
+          <Icon name="GitBranch" className="size-3.5 shrink-0" />
+        ) : (
+          <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0" />
+        )}
         <span className="shrink-0 font-semibold uppercase tracking-wide">Compare</span>
         <span className="shrink-0">with</span>
         <BranchPicker
           rpc={rpc}
           environmentId={environmentId}
           repo={repo}
-          value={base ?? "pick a branch"}
+          value={base}
           onChange={(next) => onBase(repo, next)}
         />
         <span className="min-w-0 flex-1" />
