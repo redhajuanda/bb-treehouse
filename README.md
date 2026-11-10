@@ -5,6 +5,15 @@ A [bb](https://getbb.app) plugin that adds a **Files** tab to every thread's sid
 - **Names**: a file tree of the thread's workspace with git badges (`M`, `U`, `A`, `D`), coloured names, dimmed git-ignored entries, and fuzzy **Find files** search. Click a file to open it in bb's preview.
 - **Git**: a folder dropdown listing **All repositories** and every folder that directly holds git repositories (for example `.worktrees/feature-x`, `.claude/worktrees/fix-y`, `repositories`). Repositories are found anywhere in the workspace up to 4 levels deep, skipping `node_modules`, build output and `.git`. Each repository is its own collapsible section with its branch, upstream, ahead/behind and `+/-` totals in the header (with pull and push buttons), and inside it a commit message box (Ctrl/⌘+Enter); **Commit** / **Commit All**, **Stage All**; Staged and Changes lists with per-file stage, unstage, discard (click twice to confirm) and open; click a file for its diff. Pull is fast-forward only; the first push sets the upstream.
 
+## File icons
+
+Files and folders use icons from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT), matched by file name (`go.mod`, `Dockerfile`, `package.json`, …), then by extension, including compound ones like `.d.ts` and `.test.ts`. Well-known folders (`src`, `docs`, `.github`, `node_modules`, …) get their own coloured folder icons. To keep the panel fast only a curated set of about 350 icons is bundled; anything else gets the theme's default file or folder icon. To change the set, edit the lists in `scripts/generate-file-icons.mjs` and run:
+
+```sh
+npm install
+node scripts/generate-file-icons.mjs
+```
+
 ## Performance
 
 - Folders load only when you expand them (one `readdir` plus one `git check-ignore` for that folder).

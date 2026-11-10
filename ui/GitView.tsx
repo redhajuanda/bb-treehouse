@@ -6,6 +6,7 @@ import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { ROW_HEIGHT, VirtualList } from "./VirtualList";
 import { FolderPicker, type FolderOption } from "./FolderPicker";
+import { FileIcon } from "./FileIcon";
 import { badgeClass, badgeOf, errorMessage, type Rpc } from "./data";
 
 type Section = "staged" | "changes";
@@ -739,7 +740,7 @@ const FileRow = memo(function FileRow({
       }}
       className="group flex h-full cursor-pointer items-center gap-1.5 pl-9 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
     >
-      <Icon name="File" className={cn("size-4 shrink-0", tone)} />
+      <FileIcon name={name} className={cn(deleted && "opacity-50")} />
       <span className={cn("shrink-0", deleted && "line-through")}>{name}</span>
       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{dir}</span>
       <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex group-focus-within:flex">

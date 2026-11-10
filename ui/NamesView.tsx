@@ -4,7 +4,12 @@ import type { DirEntry } from "../contract";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { VirtualList } from "./VirtualList";
+import { FileIcon } from "./FileIcon";
 import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc } from "./data";
+
+const TREE_ROW_HEIGHT = 28;
+const INDENT = 16;
+const treeRowHeight = () => TREE_ROW_HEIGHT;
 
 interface Row {
   path: string;
@@ -168,7 +173,8 @@ export function NamesView({
     <VirtualList
       items={rows}
       getKey={(row) => row.path}
-      className="py-1"
+      getHeight={treeRowHeight}
+      className="px-1 py-1"
       renderRow={(row) => (
         <TreeRow
           row={row}
@@ -199,12 +205,20 @@ const TreeRow = memo(function TreeRow({
       title={row.path}
       onClick={() => (row.dir ? onToggle(row.path) : onOpen(row.path))}
       className={cn(
-        "flex h-full w-full items-center gap-1.5 pr-3 text-left text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
-        row.ignored && "text-muted-foreground italic",
+        "relative flex h-full w-full items-center gap-1.5 rounded-md pr-3 text-left text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
+        row.ignored && "opacity-55",
       )}
-      style={{ paddingLeft: 8 + row.depth * 14 }}
+      style={{ paddingLeft: 6 + row.depth * INDENT }}
     >
-      <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+      {Array.from({ length: row.depth }, (_, level) => (
+        <span
+          key={level}
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 w-px bg-border"
+          style={{ left: 6 + level * INDENT + 7 }}
+        />
+      ))}
+      <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
         {row.dir ? (
           <Icon
             name={row.loading ? "Spinner" : row.expanded ? "ChevronDown" : "ChevronRight"}
@@ -212,11 +226,17 @@ const TreeRow = memo(function TreeRow({
           />
         ) : null}
       </span>
-      <Icon
-        name={row.dir ? (row.expanded ? "FolderOpen" : "Folder") : "File"}
-        className="size-4 shrink-0 text-muted-foreground"
-      />
-      <span className={cn("min-w-0 flex-1 truncate", tone)}>{row.name}</span>
+      <FileIcon name={row.name} dir={row.dir} open={row.expanded} className="size-[18px]" />
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          row.dir && "font-medium",
+          row.ignored && "italic",
+          tone ?? (row.dir ? "text-foreground" : "text-foreground/90"),
+        )}
+      >
+        {row.name}
+      </span>
       {row.ignored ? (
         <Icon name="Unavailable" className="size-3.5 shrink-0 text-muted-foreground" />
       ) : badge !== undefined ? (
@@ -269,7 +289,8 @@ function SearchResults({
     <VirtualList
       items={paths}
       getKey={(p) => p}
-      className="py-1"
+      getHeight={treeRowHeight}
+      className="px-1 py-1"
       renderRow={(p) => {
         const slash = p.lastIndexOf("/");
         const badge = badges.files.get(p);
@@ -279,9 +300,9 @@ function SearchResults({
             type="button"
             title={p}
             onClick={() => onOpen(p)}
-            className="flex h-full w-full items-center gap-1.5 px-3 text-left text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
+            className="flex h-full w-full items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
           >
-            <Icon name="File" className="size-4 shrink-0 text-muted-foreground" />
+            <FileIcon name={p.slice(slash + 1)} className="size-[18px]" />
             <span className={cn("shrink-0", tone)}>{p.slice(slash + 1)}</span>
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
               {slash === -1 ? "" : p.slice(0, slash)}
