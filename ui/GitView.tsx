@@ -1,12 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { experimental_Diff as Diff, useBbNavigate } from "@get-bb/plugin-sdk/app";
+import { experimental_useAppPanel, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import type { Change, RepoStatus, WorkspaceStatus } from "../contract";
-import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { ROW_HEIGHT, VirtualList } from "./VirtualList";
 import { FolderPicker, type FolderOption } from "./FolderPicker";
 import { FileIcon } from "./FileIcon";
+import { DIFF_TAB_REFERENCE, diffTabTitle, type DiffParams } from "./DiffTab";
 import { badgeClass, badgeOf, errorMessage, type Rpc } from "./data";
 
 type Section = "staged" | "changes";
@@ -124,7 +124,7 @@ export function GitView({
   const navigate = useBbNavigate();
   const [busy, setBusy] = useState<Map<string, string>>(() => new Map());
   const [notices, setNotices] = useState<Map<string, Notice>>(() => new Map());
-  const [selected, setSelected] = useState<Selected | null>(null);
+  const panel = experimental_useAppPanel();
   const [expanded, setExpanded] = useState<Map<string, boolean>>(() => expandedRepos.get(environmentId) ?? new Map());
   const [collapsed, setCollapsed] = useState<Set<string>>(() => collapsedSections.get(environmentId) ?? new Set());
   const [choice, setChoiceState] = useState<string | null>(() => groupChoice.get(environmentId) ?? null);
@@ -337,14 +337,14 @@ export function GitView({
           target: { kind: "workspace", environmentId, path: joinPath(repo, path) },
           location: null,
         }),
-      select: (value: Selected) => setSelected(value),
+      select: (value: Selected) => {
+        const params: DiffParams = value;
+        panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: diffTabTitle(params) });
+      },
     }),
-    [run, rpc, environmentId, navigate],
+    [run, rpc, environmentId, navigate, panel],
   );
 
-  if (selected !== null) {
-    return <DiffPane rpc={rpc} environmentId={environmentId} selected={selected} onBack={() => setSelected(null)} />;
-  }
   if (workspace === null) {
     return (
       <p className={cn("px-4 py-3 text-sm", workspaceError === null ? "text-muted-foreground" : "text-destructive")}>
@@ -650,7 +650,7 @@ function CommitBox({
           title={title}
           disabled={!canRun("commit")}
           onClick={() => void commit("commit")}
-          className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-l-md bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-l-md bg-[oklch(0.56_0.17_255)] text-sm font-medium text-white hover:bg-[oklch(0.51_0.17_255)] disabled:opacity-50"
         >
           <Icon
             name={busy === "commit" ? "Spinner" : "Check"}
@@ -658,7 +658,9 @@ function CommitBox({
           />
           Commit
         </button>
-        <span aria-hidden className="w-px bg-primary-foreground/25" />
+        <span aria-hidden className="w-px bg-[oklch(0.56_0.17_255)]">
+          <span className="block h-full w-full bg-white/30" />
+        </span>
         <button
           type="button"
           title="More commit actions"
@@ -666,7 +668,7 @@ function CommitBox({
           aria-expanded={menuOpen}
           disabled={busy !== null}
           onClick={() => setMenuOpen((open) => !open)}
-          className="flex w-8 shrink-0 items-center justify-center rounded-r-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="flex w-8 shrink-0 items-center justify-center rounded-r-md bg-[oklch(0.56_0.17_255)] text-white hover:bg-[oklch(0.51_0.17_255)] disabled:opacity-50"
         >
           <Icon name="ChevronDown" className="size-4" />
         </button>
@@ -925,70 +927,3 @@ const FileRow = memo(function FileRow({
     </div>
   );
 });
-
-function DiffPane({
-  rpc,
-  environmentId,
-  selected,
-  onBack,
-}: {
-  rpc: Rpc;
-  environmentId: string;
-  selected: Selected;
-  onBack: () => void;
-}) {
-  const [result, setResult] = useState<{ patch: string; truncated: boolean } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    rpc.call("diff", { environmentId, ...selected }).then(
-      (next) => {
-        if (!cancelled) setResult(next);
-      },
-      (cause: unknown) => {
-        if (!cancelled) setError(errorMessage(cause));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [rpc, environmentId, selected]);
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onBack();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onBack]);
-
-  const full = joinPath(selected.repo, selected.path);
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
-        <Button size="sm" variant="ghost" onClick={onBack}>
-          <Icon name="ArrowLeft" />
-          Back
-        </Button>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={full}>
-          {full}
-        </span>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {selected.untracked ? "untracked" : selected.staged ? "staged" : "working tree"}
-        </span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto">
-        {error !== null ? (
-          <p className="px-4 py-3 text-sm text-destructive">{error}</p>
-        ) : result === null ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">Loading diff…</p>
-        ) : result.truncated ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">This diff is too large or binary to show.</p>
-        ) : result.patch === "" ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">No textual changes.</p>
-        ) : (
-          <Diff patch={result.patch} path={selected.path} />
-        )}
-      </div>
-    </div>
-  );
-}

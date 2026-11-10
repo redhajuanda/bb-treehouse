@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { definePluginApp, type ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { DiffTab } from "./ui/DiffTab";
 import { GitView } from "./ui/GitView";
 import { NamesView } from "./ui/NamesView";
 import { indexBadges, useRefreshSignal, useTreehouseRpc, useWorkspaceStatus } from "./ui/data";
@@ -9,6 +10,17 @@ import { indexBadges, useRefreshSignal, useTreehouseRpc, useWorkspaceStatus } fr
 type Mode = "names" | "git";
 
 const modes = new Map<string, Mode>();
+const modeListeners = new Set<(mode: Mode) => void>();
+
+function requestMode(mode: Mode) {
+  if (modeListeners.size === 0) {
+    pendingMode = mode;
+    return;
+  }
+  for (const listener of modeListeners) listener(mode);
+}
+
+let pendingMode: Mode | null = null;
 const queries = new Map<string, string>();
 
 function TreehouseTab({ environment }: ExperimentalThreadTabProps) {
@@ -20,7 +32,22 @@ function TreehouseTab({ environment }: ExperimentalThreadTabProps) {
 
 function Treehouse({ environmentId }: { environmentId: string }) {
   const rpc = useTreehouseRpc();
-  const [mode, setModeState] = useState<Mode>(() => modes.get(environmentId) ?? "names");
+  const [mode, setModeState] = useState<Mode>(() => {
+    const initial = pendingMode ?? modes.get(environmentId) ?? "names";
+    pendingMode = null;
+    return initial;
+  });
+  useEffect(() => {
+    const listener = (next: Mode) => {
+      pendingMode = null;
+      modes.set(environmentId, next);
+      setModeState(next);
+    };
+    modeListeners.add(listener);
+    return () => {
+      modeListeners.delete(listener);
+    };
+  }, [environmentId]);
   const [query, setQueryState] = useState(() => queries.get(environmentId) ?? "");
   const [manual, setManual] = useState(0);
   const [collapse, setCollapse] = useState(0);
@@ -55,7 +82,9 @@ function Treehouse({ environmentId }: { environmentId: string }) {
               onClick={() => setMode(value)}
               className={cn(
                 "flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-sm",
-                mode === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                mode === value
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               {value === "names" ? "Names" : "Git"}
@@ -103,7 +132,12 @@ function Treehouse({ environmentId }: { environmentId: string }) {
                 className="h-8 min-w-0 flex-1 bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
               />
               {query === "" ? null : (
-                <button type="button" title="Clear" onClick={() => setQuery("")} className="text-muted-foreground hover:text-foreground">
+                <button
+                  type="button"
+                  title="Clear"
+                  onClick={() => setQuery("")}
+                  className="text-muted-foreground hover:text-foreground"
+                >
                   <Icon name="CircleX" className="size-3.5" />
                 </button>
               )}
@@ -145,6 +179,20 @@ export default definePluginApp((app) => {
     isAvailable: (context) => context.threadId !== null,
     run(context) {
       context.experimental_panel.toggleTab({ tab: TAB_REFERENCE });
+    },
+  });
+  app.slots.experimental_tab({
+    context: { kind: "thread" },
+    availability: "action",
+    id: "diff",
+    title: "Git changes",
+    tooltip: "Treehouse: open the Git view",
+    icon: "FileDiff",
+    layout: "flush",
+    component: DiffTab,
+    run: ({ experimental_panel }) => {
+      requestMode("git");
+      experimental_panel.openTab({ tab: TAB_REFERENCE });
     },
   });
   app.slots.experimental_tab({
