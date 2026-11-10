@@ -4,7 +4,7 @@ import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { GitView } from "./ui/GitView";
 import { NamesView } from "./ui/NamesView";
-import { indexBadges, useRefreshSignal, useStatus, useTreehouseRpc } from "./ui/data";
+import { indexBadges, useRefreshSignal, useTreehouseRpc, useWorkspaceStatus } from "./ui/data";
 
 type Mode = "names" | "git";
 
@@ -26,9 +26,12 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   const [collapse, setCollapse] = useState(0);
   const auto = useRefreshSignal(environmentId);
   const signal = auto + manual;
-  const { status, error, reload } = useStatus(rpc, environmentId, signal);
-  const badges = useMemo(() => indexBadges(status), [status]);
-  const changeCount = status !== null && status.repo ? status.files.length : 0;
+  const { workspace, error, reload } = useWorkspaceStatus(rpc, environmentId, signal);
+  const badges = useMemo(() => indexBadges(workspace), [workspace]);
+  const changeCount = useMemo(
+    () => (workspace?.repos ?? []).reduce((sum, r) => sum + (r.status.repo ? r.status.files.length : 0), 0),
+    [workspace],
+  );
 
   const setMode = (next: Mode) => {
     modes.set(environmentId, next);
@@ -77,7 +80,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
           title="Refresh"
           onClick={() => {
             setManual((n) => n + 1);
-            reload();
+            reload({ rescan: true });
           }}
           className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground"
         >
@@ -119,7 +122,13 @@ function Treehouse({ environmentId }: { environmentId: string }) {
         </>
       ) : (
         <div className="mt-2 flex min-h-0 flex-1 flex-col border-t border-border">
-          <GitView rpc={rpc} environmentId={environmentId} status={status} statusError={error} reload={reload} />
+          <GitView
+            rpc={rpc}
+            environmentId={environmentId}
+            workspace={workspace}
+            workspaceError={error}
+            reload={reload}
+          />
         </div>
       )}
     </div>

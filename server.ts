@@ -64,41 +64,41 @@ export default async function plugin(bb: BbPluginApi) {
       const { hostId, root } = await resolve(environmentId);
       return host.call("listDir", { root, rel }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
-    status: async ({ environmentId }) => {
+    workspaceStatus: async ({ environmentId, rescan }) => {
       const { hostId, root } = await resolve(environmentId);
-      return host.call("status", { root }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+      return host.call("workspaceStatus", { root, rescan }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
     search: async ({ environmentId, query }) => {
       const { hostId, root } = await resolve(environmentId);
       return host.call("search", { root, query }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
-    diff: async ({ environmentId, path, staged, untracked }) => {
+    diff: async ({ environmentId, ...input }) => {
       const { hostId, root } = await resolve(environmentId);
-      return host.call("diff", { root, path, staged, untracked }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+      return host.call("diff", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
-    stage: mutation(({ hostId, root }, { paths }) =>
-      host.call("stage", { root, paths }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    stage: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("stage", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),
-    unstage: mutation(({ hostId, root }, { paths }) =>
-      host.call("unstage", { root, paths }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    unstage: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("unstage", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),
-    discard: mutation(({ hostId, root }, { tracked, untracked }) =>
-      host.call("discard", { root, tracked, untracked }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    discard: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("discard", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),
-    commit: mutation(({ hostId, root }, { message, stageAll }) =>
-      host.call("commit", { root, message, stageAll }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    commit: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("commit", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),
-    push: mutation(({ hostId, root }) =>
-      host.call("push", { root }, { hostId, timeoutMs: NETWORK_TIMEOUT_MS }),
+    push: mutation(({ hostId, root }, { repo }) =>
+      host.call("push", { root, repo }, { hostId, timeoutMs: NETWORK_TIMEOUT_MS }),
     ),
-    pull: mutation(({ hostId, root }) =>
-      host.call("pull", { root }, { hostId, timeoutMs: NETWORK_TIMEOUT_MS }),
+    pull: mutation(({ hostId, root }, { repo }) =>
+      host.call("pull", { root, repo }, { hostId, timeoutMs: NETWORK_TIMEOUT_MS }),
     ),
   });
 
   const usage = [
     "Usage:",
-    "  bb treehouse status <environment-id> [--json]",
+    "  bb treehouse status <environment-id> [folder] [--json]",
     "  bb treehouse ls <environment-id> [dir] [--json]",
   ].join("\n");
 
@@ -108,8 +108,8 @@ export default async function plugin(bb: BbPluginApi) {
     commands: [
       {
         name: "status",
-        summary: "Show branch, ahead/behind and changed files",
-        usage: "bb treehouse status <environment-id> [--json]",
+        summary: "Show branch, ahead/behind and changed files for every git repository in the workspace, or under one folder",
+        usage: "bb treehouse status <environment-id> [folder] [--json]",
       },
       {
         name: "ls",
@@ -126,17 +126,26 @@ export default async function plugin(bb: BbPluginApi) {
       if (environmentId === undefined) return { exitCode: 1, stderr: usage };
       const { hostId, root } = await resolve(environmentId);
       if (command === "status") {
-        const result = await host.call("status", { root }, { hostId, timeoutMs: READ_TIMEOUT_MS });
-        if (json) return { exitCode: 0, stdout: JSON.stringify(result) };
-        if (!result.repo) return { exitCode: 0, stdout: "Not a git repository." };
-        const lines = [
-          `${result.branch ?? "(detached)"}${result.upstream === null ? "" : ` -> ${result.upstream}`} ↑${result.ahead} ↓${result.behind}`,
-          ...result.files.map(
-            (f) =>
-              `${f.x}${f.y} ${f.path}${f.add === null ? "" : ` +${f.add}`}${f.del === null || f.del === 0 ? "" : ` -${f.del}`}`,
-          ),
-        ];
-        if (result.truncated) lines.push("(truncated)");
+        const folder = (dir ?? "").replace(/\/+$/u, "");
+        const result = await host.call("workspaceStatus", { root, rescan: true }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+        const repos = result.repos.filter(
+          (r) => folder === "" || r.repo === folder || r.repo.startsWith(`${folder}/`),
+        );
+        if (json) return { exitCode: 0, stdout: JSON.stringify({ ...result, repos }) };
+        if (repos.length === 0) return { exitCode: 0, stdout: "No git repositories found." };
+        const lines: string[] = [];
+        for (const { repo, status } of repos) {
+          if (!status.repo) continue;
+          lines.push(
+            `[${repo === "" ? "." : repo}] ${status.branch ?? "(detached)"}${status.upstream === null ? "" : ` -> ${status.upstream}`} ↑${status.ahead} ↓${status.behind}`,
+            ...status.files.map(
+              (f) =>
+                `  ${f.x}${f.y} ${f.path}${f.add === null ? "" : ` +${f.add}`}${f.del === null || f.del === 0 ? "" : ` -${f.del}`}`,
+            ),
+          );
+          if (status.truncated) lines.push("  (truncated)");
+        }
+        if (result.truncated) lines.push("(repository scan truncated)");
         return { exitCode: 0, stdout: lines.join("\n") };
       }
       if (command === "ls") {

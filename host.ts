@@ -4,11 +4,13 @@ import path from "node:path";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import {
   MAX_DIR_ENTRIES,
+  MAX_REPOS,
   MAX_SEARCH_RESULTS,
   MAX_STATUS_FILES,
   hostContract,
   type Change,
   type DirEntry,
+  type RepoStatus,
   type Status,
 } from "./contract.js";
 
@@ -308,59 +310,184 @@ function invalidate(root: string) {
   lsFilesCache.delete(root);
 }
 
+const DISCOVERY_MAX_DEPTH = 4;
+const DISCOVERY_MAX_DIRS = 6000;
+const DISCOVERY_TTL_MS = 30_000;
+const STATUS_CONCURRENCY = 6;
+const SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  ".turbo",
+  ".cache",
+  ".venv",
+  ".pnpm-store",
+  ".gradle",
+  ".idea",
+  "dist",
+  "build",
+  "out",
+  "target",
+  "vendor",
+  "venv",
+  "__pycache__",
+  "coverage",
+]);
+
+const discoveryCache = new Map<string, { at: number; result: Promise<{ repos: string[]; truncated: boolean }> }>();
+
+function discover(root: string, rescan: boolean) {
+  const key = root;
+  const cached = discoveryCache.get(key);
+  if (!rescan && cached !== undefined && Date.now() - cached.at < DISCOVERY_TTL_MS) return cached.result;
+  const result = walkForRepos(root);
+  discoveryCache.set(key, { at: Date.now(), result });
+  result.catch(() => discoveryCache.delete(key));
+  return result;
+}
+
+async function walkForRepos(root: string) {
+  const repos: string[] = [];
+  let truncated = false;
+  let visited = 0;
+  let level: Array<{ abs: string; rel: string }> = [{ abs: path.resolve(root), rel: "" }];
+  for (let depth = 0; level.length > 0 && !truncated; depth += 1) {
+    const next: Array<{ abs: string; rel: string }> = [];
+    const listed = await Promise.all(
+      level.map(async (dir) => ({
+        dir,
+        dirents: await fs.readdir(dir.abs, { withFileTypes: true }).catch(() => []),
+      })),
+    );
+    for (const { dir, dirents } of listed) {
+      visited += 1;
+      if (dirents.some((d) => d.name === ".git")) {
+        repos.push(dir.rel);
+        if (repos.length >= MAX_REPOS) {
+          truncated = true;
+          break;
+        }
+      }
+      if (depth >= DISCOVERY_MAX_DEPTH) continue;
+      for (const d of dirents) {
+        if (!d.isDirectory() || SKIP_DIRS.has(d.name)) continue;
+        next.push({ abs: path.join(dir.abs, d.name), rel: dir.rel === "" ? d.name : `${dir.rel}/${d.name}` });
+      }
+    }
+    if (visited + next.length > DISCOVERY_MAX_DIRS) {
+      truncated = true;
+      level = next.slice(0, Math.max(0, DISCOVERY_MAX_DIRS - visited));
+    } else {
+      level = next;
+    }
+  }
+  repos.sort((a, b) => (a === "" ? -1 : b === "" ? 1 : COLLATOR.compare(a, b)));
+  return { repos, truncated };
+}
+
+async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next;
+        next += 1;
+        out[index] = await run(items[index] as T);
+      }
+    }),
+  );
+  return out;
+}
+
+async function workspaceStatus(root: string, rescan: boolean) {
+  const found = await discover(root, rescan);
+  const repos: RepoStatus[] = await mapLimit(found.repos, STATUS_CONCURRENCY, async (repo) => {
+    const repoRoot = inside(root, repo);
+    repoCache.set(repoRoot, true);
+    const result = await status(repoRoot).catch((): Status => ({ repo: false }));
+    return { repo, status: result };
+  });
+  const all = found.repos;
+  for (const entry of repos) {
+    if (!entry.status.repo) continue;
+    const prefix = entry.repo === "" ? "" : `${entry.repo}/`;
+    const nested = all
+      .filter((other) => other !== entry.repo && other.startsWith(prefix))
+      .map((other) => other.slice(prefix.length));
+    if (nested.length === 0) continue;
+    entry.status.files = entry.status.files.filter((file) => {
+      const p = file.path.replace(/\/+$/u, "");
+      return !nested.some((n) => p === n || p.startsWith(`${n}/`) || n.startsWith(`${p}/`));
+    });
+  }
+  return {
+    name: path.basename(path.resolve(root)),
+    repos: repos.filter((r) => r.status.repo),
+    truncated: found.truncated,
+  };
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   dispose: () => {
     repoCache.clear();
     lsFilesCache.clear();
+    discoveryCache.clear();
   },
   handlers: {
     listDir: ({ root, rel }) => listDir(root, rel),
-    status: ({ root }) => status(root),
+    workspaceStatus: ({ root, rescan }) => workspaceStatus(root, rescan),
     search: ({ root, query }) => search(root, query),
-    diff: ({ root, path: rel, staged, untracked }) => diff(root, rel, staged, untracked),
-    stage: async ({ root, paths }) => {
+    diff: ({ root, repo, path: rel, staged, untracked }) => diff(inside(root, repo), rel, staged, untracked),
+    stage: async ({ root, repo, paths }) => {
+      const r = inside(root, repo);
       invalidate(root);
-      return { output: await gitOk(root, ["add", "-A", "--", ...relPaths(root, paths)]) };
+      return { output: await gitOk(r, ["add", "-A", "--", ...relPaths(r, paths)]) };
     },
-    unstage: async ({ root, paths }) => {
+    unstage: async ({ root, repo, paths }) => {
+      const r = inside(root, repo);
       invalidate(root);
-      const hasHead = (await git(root, ["rev-parse", "--verify", "-q", "HEAD"])).code === 0;
-      const rels = relPaths(root, paths);
+      const hasHead = (await git(r, ["rev-parse", "--verify", "-q", "HEAD"])).code === 0;
+      const rels = relPaths(r, paths);
       const output = hasHead
-        ? await gitOk(root, ["restore", "--staged", "--", ...rels])
-        : await gitOk(root, ["rm", "--cached", "-r", "-q", "--", ...rels]);
+        ? await gitOk(r, ["restore", "--staged", "--", ...rels])
+        : await gitOk(r, ["rm", "--cached", "-r", "-q", "--", ...rels]);
       return { output };
     },
-    discard: async ({ root, tracked, untracked }) => {
+    discard: async ({ root, repo, tracked, untracked }) => {
+      const r = inside(root, repo);
       invalidate(root);
       const outputs: string[] = [];
       if (tracked.length > 0) {
         outputs.push(
-          await gitOk(root, ["restore", "--source=HEAD", "--staged", "--worktree", "--", ...relPaths(root, tracked)]),
+          await gitOk(r, ["restore", "--source=HEAD", "--staged", "--worktree", "--", ...relPaths(r, tracked)]),
         );
       }
       if (untracked.length > 0) {
-        await git(root, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...relPaths(root, untracked)]);
+        await git(r, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...relPaths(r, untracked)]);
       }
       for (const rel of untracked) {
-        await fs.rm(inside(root, rel), { recursive: true, force: true });
+        await fs.rm(inside(r, rel), { recursive: true, force: true });
       }
       return { output: outputs.join("\n") };
     },
-    commit: async ({ root, message, stageAll }) => {
+    commit: async ({ root, repo, message, stageAll }) => {
+      const r = inside(root, repo);
       invalidate(root);
-      if (stageAll) await gitOk(root, ["add", "-A"]);
-      return { output: await gitOk(root, ["commit", "-F", "-"], message) };
+      if (stageAll) await gitOk(r, ["add", "-A"]);
+      return { output: await gitOk(r, ["commit", "-F", "-"], message) };
     },
-    push: async ({ root }) => {
-      const upstream = await git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+    push: async ({ root, repo }) => {
+      const r = inside(root, repo);
+      const upstream = await git(r, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
       const args = upstream.code === 0 ? ["push"] : ["push", "-u", "origin", "HEAD"];
-      return { output: await gitOk(root, args) };
+      return { output: await gitOk(r, args) };
     },
-    pull: async ({ root }) => {
+    pull: async ({ root, repo }) => {
+      const r = inside(root, repo);
       invalidate(root);
-      return { output: await gitOk(root, ["pull", "--ff-only"]) };
+      return { output: await gitOk(r, ["pull", "--ff-only"]) };
     },
   },
 });

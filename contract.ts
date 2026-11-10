@@ -4,6 +4,7 @@ import { z } from "zod";
 export const MAX_STATUS_FILES = 5000;
 export const MAX_DIR_ENTRIES = 5000;
 export const MAX_SEARCH_RESULTS = 200;
+export const MAX_REPOS = 64;
 
 const root = z.string().min(1);
 const relPath = z.string().max(4096);
@@ -42,65 +43,48 @@ export type Status = z.infer<typeof statusSchema>;
 
 const ok = z.object({ output: z.string() });
 
-export const hostContract = defineRpcContract({
-  listDir: {
-    input: z.object({ root, rel: relPath }),
-    output: z.object({ entries: z.array(dirEntrySchema), truncated: z.boolean() }),
-  },
-  status: {
-    input: z.object({ root }),
-    output: statusSchema,
-  },
-  search: {
-    input: z.object({ root, query: z.string().min(1).max(200) }),
-    output: z.object({ paths: z.array(z.string()) }),
-  },
-  diff: {
-    input: z.object({ root, path: relPath.min(1), staged: z.boolean(), untracked: z.boolean() }),
-    output: z.object({ patch: z.string(), truncated: z.boolean() }),
-  },
-  stage: { input: z.object({ root, paths: pathList }), output: ok },
-  unstage: { input: z.object({ root, paths: pathList }), output: ok },
-  discard: {
-    input: z.object({ root, tracked: z.array(z.string().min(1)), untracked: z.array(z.string().min(1)) }),
-    output: ok,
-  },
-  commit: {
-    input: z.object({ root, message: z.string().trim().min(1).max(20000), stageAll: z.boolean() }),
-    output: ok,
-  },
-  push: { input: z.object({ root }), output: ok },
-  pull: { input: z.object({ root }), output: ok },
-});
+export const repoStatusSchema = z.object({ repo: z.string(), status: statusSchema });
+export type RepoStatus = z.infer<typeof repoStatusSchema>;
 
-const env = { environmentId: z.string().min(1) };
-
-export const rpcContract = defineRpcContract({
-  listDir: {
-    input: z.object({ ...env, rel: relPath }),
-    output: z.object({ entries: z.array(dirEntrySchema), truncated: z.boolean() }),
-  },
-  status: { input: z.object(env), output: statusSchema },
-  search: {
-    input: z.object({ ...env, query: z.string().min(1).max(200) }),
-    output: z.object({ paths: z.array(z.string()) }),
-  },
-  diff: {
-    input: z.object({ ...env, path: relPath.min(1), staged: z.boolean(), untracked: z.boolean() }),
-    output: z.object({ patch: z.string(), truncated: z.boolean() }),
-  },
-  stage: { input: z.object({ ...env, paths: pathList }), output: ok },
-  unstage: { input: z.object({ ...env, paths: pathList }), output: ok },
-  discard: {
-    input: z.object({ ...env, tracked: z.array(z.string().min(1)), untracked: z.array(z.string().min(1)) }),
-    output: ok,
-  },
-  commit: {
-    input: z.object({ ...env, message: z.string().trim().min(1).max(20000), stageAll: z.boolean() }),
-    output: ok,
-  },
-  push: { input: z.object(env), output: ok },
-  pull: { input: z.object(env), output: ok },
+const workspaceStatusOutput = z.object({
+  name: z.string(),
+  repos: z.array(repoStatusSchema),
+  truncated: z.boolean(),
 });
+export type WorkspaceStatus = z.infer<typeof workspaceStatusOutput>;
+
+const message = z.string().trim().min(1).max(20000);
+const fileLists = { tracked: z.array(z.string().min(1)), untracked: z.array(z.string().min(1)) };
+
+function contractFor<T extends z.ZodRawShape>(base: T) {
+  const repo = { ...base, repo: relPath };
+  return defineRpcContract({
+    listDir: {
+      input: z.object({ ...base, rel: relPath }),
+      output: z.object({ entries: z.array(dirEntrySchema), truncated: z.boolean() }),
+    },
+    workspaceStatus: {
+      input: z.object({ ...base, rescan: z.boolean() }),
+      output: workspaceStatusOutput,
+    },
+    search: {
+      input: z.object({ ...base, query: z.string().min(1).max(200) }),
+      output: z.object({ paths: z.array(z.string()) }),
+    },
+    diff: {
+      input: z.object({ ...repo, path: relPath.min(1), staged: z.boolean(), untracked: z.boolean() }),
+      output: z.object({ patch: z.string(), truncated: z.boolean() }),
+    },
+    stage: { input: z.object({ ...repo, paths: pathList }), output: ok },
+    unstage: { input: z.object({ ...repo, paths: pathList }), output: ok },
+    discard: { input: z.object({ ...repo, ...fileLists }), output: ok },
+    commit: { input: z.object({ ...repo, message, stageAll: z.boolean() }), output: ok },
+    push: { input: z.object(repo), output: ok },
+    pull: { input: z.object(repo), output: ok },
+  });
+}
+
+export const hostContract = contractFor({ root });
+export const rpcContract = contractFor({ environmentId: z.string().min(1) });
 
 export const CHANGED_CHANNEL = "changed";

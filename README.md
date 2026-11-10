@@ -3,13 +3,14 @@
 A [bb](https://getbb.app) plugin that adds a **Files** tab to every thread's side panel:
 
 - **Names**: a file tree of the thread's workspace with git badges (`M`, `U`, `A`, `D`), coloured names, dimmed git-ignored entries, and fuzzy **Find files** search. Click a file to open it in bb's preview.
-- **Git**: branch, upstream, ahead/behind and `+/-` totals; a commit message box (Ctrl/⌘+Enter); **Commit** / **Commit All**, **Stage All**; Staged and Changes lists with per-file stage, unstage, discard (click twice to confirm) and open; click a file for its diff; pull (fast-forward only) and push (sets upstream on first push).
+- **Git**: a folder dropdown listing **All repositories** and every folder that directly holds git repositories (for example `.worktrees/feature-x`, `.claude/worktrees/fix-y`, `repositories`). Repositories are found anywhere in the workspace up to 4 levels deep, skipping `node_modules`, build output and `.git`. Each repository is its own collapsible section with its branch, upstream, ahead/behind and `+/-` totals in the header, and inside it, ahead/behind and `+/-` totals; a commit message box (Ctrl/⌘+Enter); **Commit** / **Commit All**, **Stage All**; Staged and Changes lists with per-file stage, unstage, discard (click twice to confirm) and open; click a file for its diff; pull (fast-forward only) and push (sets upstream on first push).
 
 ## Performance
 
 - Folders load only when you expand them (one `readdir` plus one `git check-ignore` for that folder).
 - Only the rows on screen are rendered, so huge folders and long change lists scroll smoothly.
-- One `git status --porcelain=v2` per refresh. Nothing polls: refreshes come from bb's own git file watcher, Treehouse's actions, window focus, or the refresh button, and they're skipped while the tab is hidden.
+- One round trip per refresh returns every repository's status; the host runs `git status --porcelain=v2` for up to 6 repositories in parallel. Repository discovery is cached for 30 seconds (the refresh button rescans).
+- Refreshes come from bb's git file watcher, Treehouse's actions, window focus, the refresh button, and a 5-second check while the tab is showing and the window is focused. Unchanged results don't re-render, and nothing runs while the tab is hidden.
 - Search uses a 5-second cached `git ls-files` (cached, untracked, not ignored).
 
 ## Install
@@ -31,7 +32,7 @@ Then open the side panel in any thread and pick **Files**.
 ## CLI
 
 ```sh
-bb treehouse status <environment-id> [--json]   # branch, ahead/behind, changed files
+bb treehouse status <environment-id> [folder] [--json]  # every repository (or those under folder): branch, ahead/behind, changed files
 bb treehouse ls <environment-id> [dir] [--json] # one directory, marking ignored entries
 ```
 

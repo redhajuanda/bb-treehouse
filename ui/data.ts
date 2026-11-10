@@ -7,7 +7,7 @@ import {
   useRealtime,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import { CHANGED_CHANNEL, type Change, type Status, type rpcContract } from "../contract";
+import { CHANGED_CHANNEL, type Change, type WorkspaceStatus, type rpcContract } from "../contract";
 
 export type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
@@ -27,6 +27,7 @@ const gitStatusContract = defineRpcContract({
 });
 
 const changedPayload = z.object({ environmentId: z.string() });
+const POLL_MS = 5000;
 
 export function useRefreshSignal(environmentId: string): number {
   const visible = experimental_useTabVisible();
@@ -83,19 +84,30 @@ export function useRefreshSignal(environmentId: string): number {
     return () => window.removeEventListener("focus", onFocus);
   }, [request]);
 
+  useEffect(() => {
+    if (!visible) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible" && document.hasFocus()) bump();
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [visible, bump]);
+
   return tick;
 }
 
-export function useStatus(rpc: Rpc, environmentId: string, signal: number) {
-  const [status, setStatus] = useState<Status | null>(null);
+export function useWorkspaceStatus(rpc: Rpc, environmentId: string, signal: number) {
+  const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [manual, setManual] = useState(0);
+  const rescan = useRef(false);
   useEffect(() => {
     let cancelled = false;
-    rpc.call("status", { environmentId }).then(
+    const force = rescan.current;
+    rescan.current = false;
+    rpc.call("workspaceStatus", { environmentId, rescan: force }).then(
       (next) => {
         if (cancelled) return;
-        setStatus((prev) => (prev !== null && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+        setWorkspace((prev) => (prev !== null && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
         setError(null);
       },
       (cause: unknown) => {
@@ -106,8 +118,11 @@ export function useStatus(rpc: Rpc, environmentId: string, signal: number) {
       cancelled = true;
     };
   }, [rpc, environmentId, signal, manual]);
-  const reload = useCallback(() => setManual((n) => n + 1), []);
-  return { status, error, reload };
+  const reload = useCallback((options?: { rescan: boolean }) => {
+    if (options?.rescan === true) rescan.current = true;
+    setManual((n) => n + 1);
+  }, []);
+  return { workspace, error, reload };
 }
 
 export type Badge = "M" | "U" | "A" | "D" | "R" | "C";
@@ -142,20 +157,25 @@ export interface BadgeIndex {
   dirs: Map<string, Badge>;
 }
 
-export function indexBadges(status: Status | null): BadgeIndex {
+export function indexBadges(workspace: WorkspaceStatus | null): BadgeIndex {
   const files = new Map<string, Badge>();
   const dirs = new Map<string, Badge>();
-  if (status === null || !status.repo) return { files, dirs };
-  for (const change of status.files) {
-    const badge = badgeOf(change);
-    files.set(change.path, badge);
-    let slash = change.path.lastIndexOf("/");
-    while (slash > 0) {
-      const dir = change.path.slice(0, slash);
-      const prev = dirs.get(dir);
-      if (prev !== undefined && BADGE_RANK[prev] >= BADGE_RANK[badge]) break;
-      dirs.set(dir, badge);
-      slash = dir.lastIndexOf("/");
+  if (workspace === null) return { files, dirs };
+  for (const { repo, status } of workspace.repos) {
+    if (!status.repo) continue;
+    const prefix = repo === "" ? "" : `${repo}/`;
+    for (const change of status.files) {
+      const badge = badgeOf(change);
+      const full = `${prefix}${change.path.replace(/\/+$/u, "")}`;
+      files.set(full, badge);
+      let slash = full.lastIndexOf("/");
+      while (slash > 0) {
+        const dir = full.slice(0, slash);
+        const prev = dirs.get(dir);
+        if (prev !== undefined && BADGE_RANK[prev] >= BADGE_RANK[badge]) break;
+        dirs.set(dir, badge);
+        slash = dir.lastIndexOf("/");
+      }
     }
   }
   return { files, dirs };
