@@ -1,5 +1,7 @@
 # Treehouse
 
+![Treehouse: file tree, per-repository diff with ✨ commit messages, branch compare and commit graph](docs/demo.gif)
+
 A [bb](https://getbb.app) plugin that adds a **Files** tab to every thread's side panel, with three views:
 
 - **Files**: a file tree with a searchable folder picker (the workspace, every folder that holds git repositories such as `.worktrees/feature-x`, and every repository). Picking one roots the tree and **Find files** there. Git badges (`M`, `U`, `A`, `D`) and coloured names come from whichever repository each file belongs to. Ignored entries are judged by the repository that contains them: a folder that is its own repository is never shown as ignored, and inside an ignored folder only the folder itself carries the mark. The eye button hides ignored entries entirely. Click a file to open it in bb's preview.

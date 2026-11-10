@@ -150,7 +150,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col [&_[role=button]]:cursor-pointer [&_[role=option]]:cursor-pointer [&_[role=tab]]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_button]:cursor-pointer [&_select]:cursor-pointer">
+    <div className="flex h-full min-h-0 flex-col [&_[role=button]]:cursor-pointer [&_[role=button]:focus]:outline-none [&_[role=button]:focus-visible]:ring-1 [&_[role=button]:focus-visible]:ring-inset [&_[role=button]:focus-visible]:ring-ring [&_[role=option]:focus]:outline-none [&_[role=option]]:cursor-pointer [&_[role=tab]]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_button]:cursor-pointer [&_select]:cursor-pointer">
       <div className="flex items-stretch border-b border-border pr-1">
         <div role="tablist" aria-label="Treehouse view" className="relative grid flex-1 grid-cols-3">
           <span
@@ -319,7 +319,7 @@ export default definePluginApp((app) => {
     availability: "fixed",
     id: "treehouse",
     title: "Files",
-    tooltip: "Treehouse: files and git",
+    tooltip: "Treehouse: files, diff and graph",
     icon: "Folder02",
     layout: "flush",
     component: TreehouseTab,
