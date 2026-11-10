@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { experimental_Diff as Diff, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import type { Change, RepoStatus, WorkspaceStatus } from "../contract";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,8 @@ type Repo = Extract<RepoStatus["status"], { repo: true }>;
 const ALL = "\u0000all";
 const REPO_HEADER_HEIGHT = 34;
 const REPO_HEADER_GAP = 12;
+const COMMIT_HEIGHT = 80;
+const COMMIT_NOTICE_HEIGHT = 38;
 const REPO_HUES = [250, 150, 30, 300, 195, 75, 340, 110];
 const GUIDE_LEFT = 17;
 
@@ -39,7 +41,8 @@ function RepoGuide({ repo }: { repo: string }) {
 }
 
 type Item =
-  | { kind: "repo"; repo: string; label: string; status: Repo; expanded: boolean; target: boolean; first: boolean }
+  | { kind: "repo"; repo: string; label: string; status: Repo; expanded: boolean; first: boolean }
+  | { kind: "commit"; repo: string; status: Repo; notice: boolean }
   | { kind: "section"; repo: string; section: Section; count: number; collapsed: boolean }
   | { kind: "file"; repo: string; section: Section; change: Change }
   | { kind: "clean"; repo: string };
@@ -58,7 +61,6 @@ interface Notice {
 
 const drafts = new Map<string, string>();
 const groupChoice = new Map<string, string>();
-const targetChoice = new Map<string, string>();
 const expandedRepos = new Map<string, Map<string, boolean>>();
 const collapsedSections = new Map<string, Set<string>>();
 
@@ -87,6 +89,7 @@ function joinPath(repo: string, path: string): string {
 
 function heightOf(item: Item): number {
   if (item.kind === "repo") return item.first ? REPO_HEADER_HEIGHT : REPO_HEADER_HEIGHT + REPO_HEADER_GAP;
+  if (item.kind === "commit") return item.notice ? COMMIT_HEIGHT + COMMIT_NOTICE_HEIGHT : COMMIT_HEIGHT;
   return ROW_HEIGHT;
 }
 
@@ -96,6 +99,8 @@ function keyOf(item: Item): string {
       return `r:${item.repo}`;
     case "clean":
       return `n:${item.repo}`;
+    case "commit":
+      return `c:${item.repo}`;
     case "section":
       return `s:${item.repo}:${item.section}`;
     case "file":
@@ -200,20 +205,6 @@ export function GitView({
     [expanded, visibleRepos.length],
   );
 
-  const [targetState, setTargetState] = useState<string | null>(() => targetChoice.get(environmentId) ?? null);
-  const target =
-    visibleRepos.find((r) => r.repo === targetState) ??
-    visibleRepos.find((r) => r.status.files.length > 0) ??
-    visibleRepos[0] ??
-    null;
-  const setTarget = useCallback(
-    (repo: string) => {
-      targetChoice.set(environmentId, repo);
-      setTargetState(repo);
-    },
-    [environmentId],
-  );
-
   const items = useMemo(() => {
     const out: Item[] = [];
     for (const { repo, status } of visibleRepos) {
@@ -224,10 +215,10 @@ export function GitView({
         label: labelFor(repo),
         status,
         expanded: open,
-        target: visibleRepos.length > 1 && repo === target?.repo,
         first: out.length === 0,
       });
       if (!open) continue;
+      out.push({ kind: "commit", repo, status, notice: notices.has(repo) || status.truncated });
       if (status.files.length === 0) {
         out.push({ kind: "clean", repo });
         continue;
@@ -245,7 +236,7 @@ export function GitView({
       }
     }
     return out;
-  }, [visibleRepos, isExpanded, labelFor, collapsed, target?.repo]);
+  }, [visibleRepos, isExpanded, labelFor, collapsed, notices]);
 
   const toggleRepo = useCallback(
     (repo: string, current: boolean) => {
@@ -257,14 +248,6 @@ export function GitView({
       });
     },
     [environmentId],
-  );
-
-  const selectRepo = useCallback(
-    (repo: string, expandedNow: boolean) => {
-      setTarget(repo);
-      if (!expandedNow) toggleRepo(repo, false);
-    },
-    [setTarget, toggleRepo],
   );
 
   const toggleSection = useCallback(
@@ -328,13 +311,25 @@ export function GitView({
       },
       push: (repo: string) => void run(repo, "push", () => rpc.call("push", { environmentId, repo })),
       pull: (repo: string) => void run(repo, "pull", () => rpc.call("pull", { environmentId, repo })),
-      commit: (repo: string, message: string, stagedCount: number) => {
-        const stageAll = stagedCount === 0;
+      commit: (repo: string, message: string, stagedCount: number, mode: CommitMode) => {
+        const stageAll = stagedCount === 0 && mode !== "amend";
+        const amend = mode === "amend";
         return run(
           repo,
           "commit",
-          () => rpc.call("commit", { environmentId, repo, message, stageAll }),
-          stageAll ? "Committed all changes." : `Committed ${stagedCount} staged file${stagedCount === 1 ? "" : "s"}.`,
+          async () => {
+            const committed = await rpc.call("commit", { environmentId, repo, message, stageAll, amend });
+            if (mode !== "push") return committed;
+            const pushed = await rpc.call("push", { environmentId, repo });
+            return { output: `${committed.output}\n${pushed.output}` };
+          },
+          amend
+            ? "Amended the last commit."
+            : mode === "push"
+              ? "Committed and pushed."
+              : stageAll
+                ? "Committed all changes."
+                : `Committed ${stagedCount} staged file${stagedCount === 1 ? "" : "s"}.`,
         );
       },
       open: (repo: string, path: string) =>
@@ -384,14 +379,24 @@ export function GitView({
                   label={item.label}
                   status={item.status}
                   expanded={item.expanded}
-                  target={item.target}
                   first={item.first}
                   multi={visibleRepos.length > 1}
                   busy={repoBusy}
                   onToggle={toggleRepo}
-                  onSelect={selectRepo}
                   onPush={actions.push}
                   onPull={actions.pull}
+                />
+              );
+            case "commit":
+              return (
+                <CommitBox
+                  key={`${environmentId}\u0000${item.repo}`}
+                  draftKey={`${environmentId}\u0000${item.repo}`}
+                  repo={item.repo}
+                  status={item.status}
+                  busy={repoBusy}
+                  notice={notices.get(item.repo) ?? null}
+                  onCommit={actions.commit}
                 />
               );
             case "clean":
@@ -433,20 +438,6 @@ export function GitView({
           }
         }}
       />
-      {target === null ? null : (
-        <CommitBar
-          key={`${environmentId}\u0000${target.repo}`}
-          draftKey={`${environmentId}\u0000${target.repo}`}
-          repos={visibleRepos.map((r) => ({ repo: r.repo, label: labelFor(r.repo), changes: r.status.files.length }))}
-          target={target.repo}
-          targetLabel={labelFor(target.repo)}
-          status={target.status}
-          busy={busy.get(target.repo) ?? null}
-          notice={notices.get(target.repo) ?? null}
-          onTarget={setTarget}
-          onCommit={actions.commit}
-        />
-      )}
     </div>
   );
 }
@@ -456,12 +447,10 @@ const RepoHeader = memo(function RepoHeader({
   label,
   status,
   expanded,
-  target,
   first,
   multi,
   busy,
   onToggle,
-  onSelect,
   onPush,
   onPull,
 }: {
@@ -469,12 +458,10 @@ const RepoHeader = memo(function RepoHeader({
   label: string;
   status: Repo;
   expanded: boolean;
-  target: boolean;
   first: boolean;
   multi: boolean;
   busy: string | null;
   onToggle: (repo: string, current: boolean) => void;
-  onSelect: (repo: string, expanded: boolean) => void;
   onPush: (repo: string) => void;
   onPull: (repo: string) => void;
 }) {
@@ -486,33 +473,20 @@ const RepoHeader = memo(function RepoHeader({
       <div
         role="button"
         tabIndex={0}
-        aria-pressed={target}
+        aria-expanded={expanded}
         title={`${repo === "" ? "." : repo}${publish ? " · no upstream" : ` → ${status.upstream}`}`}
-        onClick={() => onSelect(repo, expanded)}
+        onClick={() => onToggle(repo, expanded)}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            onSelect(repo, expanded);
+            onToggle(repo, expanded);
           }
         }}
-        className={cn(
-          "relative mx-1 flex h-[30px] shrink-0 items-center gap-1.5 rounded-md pl-0.5 pr-1.5 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
-          target && "bg-state-active hover:bg-state-active",
-        )}
-        style={target ? { boxShadow: `inset 2px 0 0 ${color}` } : undefined}
+        className="relative mx-1 flex h-[30px] shrink-0 items-center gap-1.5 rounded-md pl-0.5 pr-1.5 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
       >
-        <button
-          type="button"
-          aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
-          aria-expanded={expanded}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle(repo, expanded);
-          }}
-          className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-        >
+        <span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">
           <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
-        </button>
+        </span>
         {multi ? (
           <span
             aria-hidden
@@ -588,28 +562,32 @@ function SyncButton({
   );
 }
 
-function CommitBar({
+type CommitMode = "commit" | "push" | "amend";
+
+const COMMIT_MODES: ReadonlyArray<{ mode: CommitMode; label: string; icon: string }> = [
+  { mode: "commit", label: "Commit", icon: "Check" },
+  { mode: "push", label: "Commit & Push", icon: "ArrowUp" },
+  { mode: "amend", label: "Amend Last Commit", icon: "Edit" },
+];
+
+function CommitBox({
   draftKey,
-  repos,
-  target,
-  targetLabel,
+  repo,
   status,
   busy,
   notice,
-  onTarget,
   onCommit,
 }: {
   draftKey: string;
-  repos: Array<{ repo: string; label: string; changes: number }>;
-  target: string;
-  targetLabel: string;
+  repo: string;
   status: Repo;
   busy: string | null;
   notice: Notice | null;
-  onTarget: (repo: string) => void;
-  onCommit: (repo: string, message: string, stagedCount: number) => Promise<boolean>;
+  onCommit: (repo: string, message: string, stagedCount: number, mode: CommitMode) => Promise<boolean>;
 }) {
   const [message, setMessageState] = useState(() => drafts.get(draftKey) ?? "");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const setMessage = (value: string) => {
     drafts.set(draftKey, value);
     setMessageState(value);
@@ -617,76 +595,108 @@ function CommitBar({
   const stagedCount = status.files.filter(isStaged).length;
   const total = status.files.length;
   const mac = navigator.platform.startsWith("Mac");
-  const commit = async () => {
+  const branch = status.branch ?? "HEAD";
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (menuRef.current !== null && !menuRef.current.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  const canRun = (mode: CommitMode) => busy === null && message.trim() !== "" && (mode === "amend" ? true : total > 0);
+  const commit = async (mode: CommitMode) => {
+    setMenuOpen(false);
     const text = message.trim();
-    if (text === "" || busy !== null || total === 0) return;
-    if (await onCommit(target, text, stagedCount)) setMessage("");
+    if (!canRun(mode)) return;
+    if (await onCommit(repo, text, stagedCount, mode)) setMessage("");
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      void commit();
+      void commit("commit");
     }
   };
-  const label =
+  const title =
     total === 0
       ? "Nothing to commit"
       : stagedCount > 0
         ? `Commit ${stagedCount} staged file${stagedCount === 1 ? "" : "s"}`
-        : `Commit all ${total} file${total === 1 ? "" : "s"}`;
+        : `Stage all ${total} change${total === 1 ? "" : "s"} and commit`;
+
   return (
-    <div className="shrink-0 border-t border-border bg-background px-3 pb-3 pt-2.5">
-      <div className="mb-2 flex items-center gap-2 text-xs">
-        <span className="text-muted-foreground">Commit to</span>
-        {repos.length > 1 ? (
-          <span className="relative min-w-0">
-            <select
-              value={target}
-              onChange={(event) => onTarget(event.target.value)}
-              aria-label="Repository to commit to"
-              className="h-6 max-w-[180px] appearance-none truncate rounded-full bg-secondary pl-2.5 pr-6 text-xs font-medium text-secondary-foreground hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {repos.map((r) => (
-                <option key={r.repo} value={r.repo}>
-                  {r.label}
-                  {r.changes > 0 ? ` (${r.changes})` : ""}
-                </option>
-              ))}
-            </select>
-            <Icon
-              name="ChevronDown"
-              className="pointer-events-none absolute right-1.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
-            />
-          </span>
-        ) : (
-          <span className="truncate font-medium">{targetLabel}</span>
-        )}
-        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{status.branch ?? "detached"}</span>
-        <span className="shrink-0 text-muted-foreground">{mac ? "⌘↵" : "Ctrl+↵"}</span>
-      </div>
+    <div className="relative flex h-full flex-col gap-1.5 py-1.5 pl-9 pr-2">
+      <RepoGuide repo={repo} />
       <textarea
         value={message}
         onChange={(event) => setMessage(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="Message"
-        rows={2}
-        className="block max-h-40 min-h-[52px] w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        rows={1}
+        placeholder={`Message (${mac ? "⌘↵" : "Ctrl+↵"} to commit on "${branch}")`}
+        className="block h-8 w-full shrink-0 resize-none overflow-hidden rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm leading-[18px] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       />
-      <Button
-        size="sm"
-        className="mt-2 h-8 w-full"
-        disabled={busy !== null || message.trim() === "" || total === 0}
-        onClick={() => void commit()}
-      >
-        <Icon name={busy === "commit" ? "Spinner" : "Check"} className={cn(busy === "commit" && "animate-spin")} />
-        <span className="truncate">{label}</span>
-      </Button>
+      <div ref={menuRef} className="relative flex h-[30px] shrink-0">
+        <button
+          type="button"
+          title={title}
+          disabled={!canRun("commit")}
+          onClick={() => void commit("commit")}
+          className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-l-md bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          <Icon
+            name={busy === "commit" ? "Spinner" : "Check"}
+            className={cn("size-4", busy === "commit" && "animate-spin")}
+          />
+          Commit
+        </button>
+        <span aria-hidden className="w-px bg-primary-foreground/25" />
+        <button
+          type="button"
+          title="More commit actions"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          disabled={busy !== null}
+          onClick={() => setMenuOpen((open) => !open)}
+          className="flex w-8 shrink-0 items-center justify-center rounded-r-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          <Icon name="ChevronDown" className="size-4" />
+        </button>
+        {menuOpen ? (
+          <div
+            role="menu"
+            className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+          >
+            {COMMIT_MODES.map((entry) => (
+              <button
+                key={entry.mode}
+                type="button"
+                role="menuitem"
+                disabled={!canRun(entry.mode)}
+                onClick={() => void commit(entry.mode)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-state-hover disabled:opacity-50"
+              >
+                <Icon name={entry.icon} className="size-4 text-muted-foreground" />
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
       {notice !== null || status.truncated ? (
         <p
           role={notice?.tone === "error" ? "alert" : "status"}
           title={notice?.text}
           className={cn(
-            "mt-1.5 line-clamp-2 break-words text-xs",
+            "line-clamp-2 shrink-0 break-words text-xs leading-4",
             notice?.tone === "error" ? "text-destructive" : "text-muted-foreground",
           )}
         >

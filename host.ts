@@ -472,11 +472,12 @@ export default experimental_defineHostEntry({
       }
       return { output: outputs.join("\n") };
     },
-    commit: async ({ root, repo, message, stageAll }) => {
+    commit: async ({ root, repo, message, stageAll, amend }) => {
       const r = inside(root, repo);
       invalidate(root);
       if (stageAll) await gitOk(r, ["add", "-A"]);
-      return { output: await gitOk(r, ["commit", "-F", "-"], message) };
+      const args = amend ? ["commit", "--amend", "-F", "-"] : ["commit", "-F", "-"];
+      return { output: await gitOk(r, args, message) };
     },
     push: async ({ root, repo }) => {
       const r = inside(root, repo);

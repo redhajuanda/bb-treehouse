@@ -78,7 +78,7 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
     stage: { input: z.object({ ...repo, paths: pathList }), output: ok },
     unstage: { input: z.object({ ...repo, paths: pathList }), output: ok },
     discard: { input: z.object({ ...repo, ...fileLists }), output: ok },
-    commit: { input: z.object({ ...repo, message, stageAll: z.boolean() }), output: ok },
+    commit: { input: z.object({ ...repo, message, stageAll: z.boolean(), amend: z.boolean() }), output: ok },
     push: { input: z.object(repo), output: ok },
     pull: { input: z.object(repo), output: ok },
   });
