@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { definePluginApp, type ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
+import {
+  definePluginApp,
+  type ExperimentalThreadTabProps,
+  type PluginNewThreadPanelProps,
+} from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { DiffTab } from "./ui/DiffTab";
@@ -7,7 +11,14 @@ import { GitView } from "./ui/GitView";
 import { GraphView } from "./ui/GraphView";
 import { FolderPicker, type FolderOption } from "./ui/FolderPicker";
 import { NamesView } from "./ui/NamesView";
-import { indexBadges, useRefreshSignal, useTreehouseRpc, useWatchLease, useWorkspaceStatus } from "./ui/data";
+import {
+  indexBadges,
+  useLocation,
+  useRefreshSignal,
+  useTreehouseRpc,
+  useWatchLease,
+  useWorkspaceStatus,
+} from "./ui/data";
 
 type Mode = "files" | "diff" | "graph";
 
@@ -47,8 +58,20 @@ function TreehouseTab({ environment }: ExperimentalThreadTabProps) {
   return <Treehouse key={environment.id} environmentId={environment.id} />;
 }
 
+function NewThreadTreehouse({ projectId }: PluginNewThreadPanelProps) {
+  if (projectId === null) {
+    return (
+      <p className="px-4 py-3 text-sm text-muted-foreground">
+        Pick a project to browse its files. Threads without a project start in their own empty scratch folder.
+      </p>
+    );
+  }
+  return <Treehouse key={projectId} environmentId={projectId} />;
+}
+
 function Treehouse({ environmentId }: { environmentId: string }) {
   const rpc = useTreehouseRpc();
+  useLocation(rpc, environmentId);
   const [mode, setModeState] = useState<Mode>(() => {
     const initial = pendingMode ?? modes.get(environmentId) ?? "files";
     pendingMode = null;
@@ -259,6 +282,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
               key={base}
               base={base}
               hideIgnored={hideIgnored}
+              rootPath={workspace?.root ?? null}
               rpc={rpc}
               environmentId={environmentId}
               badges={badges}
@@ -291,6 +315,13 @@ function Treehouse({ environmentId }: { environmentId: string }) {
 const TAB_REFERENCE = { id: "treehouse", context: { kind: "thread" }, availability: "fixed" } as const;
 
 export default definePluginApp((app) => {
+  app.slots.experimental_newThreadPanelAction({
+    id: "treehouse",
+    title: "Treehouse",
+    icon: "Folder02",
+    layout: "flush",
+    component: NewThreadTreehouse,
+  });
   app.commands.register({
     id: "toggle-files",
     title: "Treehouse: toggle files",

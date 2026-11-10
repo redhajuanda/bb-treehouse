@@ -8,6 +8,7 @@ const READ_TIMEOUT_MS = 20_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const NETWORK_TIMEOUT_MS = 300_000;
 const ENV_CACHE_MS = 30_000;
+const PROJECT_PREFIX = "proj_";
 
 interface Target {
   hostId: string;
@@ -48,6 +49,14 @@ export default async function plugin(bb: BbPluginApi) {
   async function resolve(environmentId: string): Promise<Target> {
     const cached = targets.get(environmentId);
     if (cached !== undefined && Date.now() - cached.at < ENV_CACHE_MS) return cached.target;
+    const target = environmentId.startsWith(PROJECT_PREFIX)
+      ? await resolveProject(environmentId)
+      : await resolveEnvironment(environmentId);
+    targets.set(environmentId, { at: Date.now(), target });
+    return target;
+  }
+
+  async function resolveEnvironment(environmentId: string): Promise<Target> {
     const environment = await bb.sdk.environments.get({ environmentId });
     if (environment.status !== "ready" || environment.path === null) {
       throw new experimental_PluginRpcRefusal({
@@ -55,9 +64,20 @@ export default async function plugin(bb: BbPluginApi) {
         message: "Workspace is not ready yet.",
       });
     }
-    const target = { hostId: environment.hostId, root: environment.path };
-    targets.set(environmentId, { at: Date.now(), target });
-    return target;
+    return { hostId: environment.hostId, root: environment.path };
+  }
+
+  async function resolveProject(projectId: string): Promise<Target> {
+    const project = await bb.sdk.projects.get({ projectId });
+    const local = project.sources.filter((source) => source.type === "local_path");
+    const source = local.find((candidate) => candidate.isDefault) ?? local[0];
+    if (source === undefined || source.path === null || source.hostId === null) {
+      throw new experimental_PluginRpcRefusal({
+        code: "conflict",
+        message: "This project has no local folder to show yet.",
+      });
+    }
+    return { hostId: source.hostId, root: source.path };
   }
 
   async function changed(environmentId: string) {
@@ -131,6 +151,7 @@ export default async function plugin(bb: BbPluginApi) {
       const { hostId, root } = await resolve(environmentId);
       return host.call("commitContext", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
+    locate: ({ environmentId }) => resolve(environmentId),
     suggestMessage: async ({ environmentId, repo }) => {
       const { hostId, root } = await resolve(environmentId);
       const context = await host.call("commitContext", { root, repo }, { hostId, timeoutMs: READ_TIMEOUT_MS });

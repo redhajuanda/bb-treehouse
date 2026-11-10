@@ -14,7 +14,7 @@ import {
   type FileDiffParams,
 } from "./DiffTab";
 import { BranchPicker } from "./BranchPicker";
-import { badgeClass, badgeOf, errorMessage, useCachedState, type Rpc } from "./data";
+import { badgeClass, badgeOf, errorMessage, useCachedState, type Rpc, fileTarget } from "./data";
 
 type Section = "staged" | "changes";
 type Repo = Extract<RepoStatus["status"], { repo: true }>;
@@ -411,7 +411,9 @@ export function GitView({
         const result = await action();
         const text =
           success ??
-          (label === "push" || label === "pull" || label === "pr" ? result.output.split("\n").slice(-2).join(" ") || "Done." : null);
+          (label === "push" || label === "pull" || label === "pr"
+            ? result.output.split("\n").slice(-2).join(" ") || "Done."
+            : null);
         if (text !== null) setNotices((prev) => new Map(prev).set(repo, { tone: "info", text }));
         return true;
       } catch (cause) {
@@ -467,14 +469,15 @@ export function GitView({
                 : `Committed ${stagedCount} staged file${stagedCount === 1 ? "" : "s"}.`,
         );
       },
-      open: (repo: string, path: string) =>
-        void navigate.experimental_openFilePreview({
-          target: { kind: "workspace", environmentId, path: joinPath(repo, path) },
-          location: null,
-        }),
+      open: (repo: string, path: string) => {
+        const target = fileTarget(environmentId, joinPath(repo, path));
+        if (target !== null) void navigate.experimental_openFilePreview({ target, location: null });
+      },
       select: (value: Selected) => {
         const params: FileDiffParams = { kind: "file", ...value };
-        panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: diffTabTitle(params) });
+        if (panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: diffTabTitle(params) })) return;
+        const target = fileTarget(environmentId, joinPath(value.repo, value.path));
+        if (target !== null) void navigate.experimental_openFilePreview({ target, location: null });
       },
       suggest: async (repo: string): Promise<string | null> => {
         setNotices((prev) => {
@@ -509,7 +512,10 @@ export function GitView({
         ),
       openCompare: (repo: string, base: string, path: string) => {
         const params: CompareDiffParams = { kind: "compare", repo, base, path };
-        panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: compareTabTitle(params) });
+        if (panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: compareTabTitle(params) })) return;
+        setNotices((prev) =>
+          new Map(prev).set(repo, { tone: "info", text: "Branch diffs open in a tab once the thread has started." }),
+        );
       },
     }),
     [run, rpc, environmentId, navigate, panel],

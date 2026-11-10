@@ -477,6 +477,7 @@ async function workspaceStatus(root: string, rescan: boolean) {
   }
   return {
     name: path.basename(path.resolve(root)),
+    root: path.resolve(root),
     repos: repos.filter((r) => r.status.repo),
     truncated: found.truncated,
   };

@@ -160,7 +160,9 @@ export function GraphView({
     (commit: Commit) => {
       if (repoKey === null) return;
       const params: DiffParams = { kind: "commit", repo: repoKey, sha: commit.sha, subject: commit.subject };
-      panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: commitTabTitle(params) });
+      if (!panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: commitTabTitle(params) })) {
+        setError("Commit details open in a tab once the thread has started.");
+      }
     },
     [panel, repoKey],
   );
@@ -220,6 +222,11 @@ export function GraphView({
           />
         </div>
       </div>
+      {error !== null && commits !== null ? (
+        <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">
+          {error}
+        </p>
+      ) : null}
       <div className="min-h-0 flex-1 border-t border-border">
         {error !== null && commits === null ? (
           <p className="px-4 py-3 text-sm text-destructive">{error}</p>

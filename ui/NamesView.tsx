@@ -5,7 +5,7 @@ import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { VirtualList } from "./VirtualList";
 import { FileIcon } from "./FileIcon";
-import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc, useCachedState } from "./data";
+import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc, useCachedState, fileTarget } from "./data";
 
 const TREE_ROW_HEIGHT = 28;
 const INDENT = 16;
@@ -43,6 +43,7 @@ export function NamesView({
   collapseSignal,
   base,
   hideIgnored,
+  rootPath,
 }: {
   rpc: Rpc;
   environmentId: string;
@@ -52,6 +53,7 @@ export function NamesView({
   collapseSignal: number;
   base: string;
   hideIgnored: boolean;
+  rootPath: string | null;
 }) {
   const navigate = useBbNavigate();
   const [dirs, setDirs] = useCachedState(dirsCache, environmentId, () => new Map<string, DirEntry[]>());
@@ -136,10 +138,9 @@ export function NamesView({
 
   const open = useCallback(
     (rel: string) => {
-      navigate.experimental_openFilePreview({
-        target: { kind: "workspace", environmentId, path: rel },
-        location: null,
-      });
+      const target = fileTarget(environmentId, rel);
+      if (target === null) return;
+      navigate.experimental_openFilePreview({ target, location: null });
     },
     [navigate, environmentId],
   );
@@ -179,6 +180,27 @@ export function NamesView({
   }
   if (!dirs.has(base)) {
     return <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>;
+  }
+  if (rows.length === 0) {
+    const scratch = rootPath !== null && rootPath.includes("/environment-personal-workspace/");
+    return (
+      <div className="px-4 py-6 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">This folder is empty.</p>
+        {rootPath === null ? null : (
+          <p className="mt-1 break-all font-mono text-xs" title={rootPath}>
+            {base === "" ? rootPath : `${rootPath}/${base}`}
+          </p>
+        )}
+        {scratch ? (
+          <p className="mt-3">
+            Threads without a project run in their own empty scratch folder, not your home folder. Files the agent
+            creates here will show up as it works. To browse a repository, start the thread in a project.
+          </p>
+        ) : hideIgnored ? (
+          <p className="mt-3">Ignored files are hidden; the eye button shows them.</p>
+        ) : null}
+      </div>
+    );
   }
   return (
     <VirtualList

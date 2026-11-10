@@ -48,6 +48,7 @@ export type RepoStatus = z.infer<typeof repoStatusSchema>;
 
 const workspaceStatusOutput = z.object({
   name: z.string(),
+  root: z.string(),
   repos: z.array(repoStatusSchema),
   truncated: z.boolean(),
 });
@@ -214,6 +215,10 @@ export const hostContract = {
 export const rpcContract = {
   ...contractFor({ environmentId: z.string().min(1) }),
   ...defineRpcContract({
+    locate: {
+      input: z.object({ environmentId: z.string().min(1) }),
+      output: z.object({ hostId: z.string(), root: z.string() }),
+    },
     suggestMessage: {
       input: z.object({ environmentId: z.string().min(1), repo: relPath }),
       output: z.object({ message: z.string(), source: z.enum(["api", "cli"]) }),

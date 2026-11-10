@@ -226,3 +226,31 @@ export function indexBadges(workspace: WorkspaceStatus | null): BadgeIndex {
   }
   return { files, dirs };
 }
+
+export const PROJECT_PREFIX = "proj_";
+
+export function isProjectScope(id: string): boolean {
+  return id.startsWith(PROJECT_PREFIX);
+}
+
+const locations = new Map<string, { hostId: string; root: string }>();
+
+export function useLocation(rpc: Rpc, id: string): void {
+  useEffect(() => {
+    if (!isProjectScope(id) || locations.has(id)) return;
+    rpc.call("locate", { environmentId: id }).then(
+      (location) => locations.set(id, location),
+      () => undefined,
+    );
+  }, [rpc, id]);
+}
+
+export function fileTarget(
+  id: string,
+  path: string,
+): { kind: "workspace"; environmentId: string; path: string } | { kind: "host"; hostId: string; path: string } | null {
+  if (!isProjectScope(id)) return { kind: "workspace", environmentId: id, path };
+  const location = locations.get(id);
+  if (location === undefined) return null;
+  return { kind: "host", hostId: location.hostId, path: `${location.root.replace(/\/+$/u, "")}/${path}` };
+}
