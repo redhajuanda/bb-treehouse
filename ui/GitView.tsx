@@ -14,11 +14,9 @@ type Repo = Extract<RepoStatus["status"], { repo: true }>;
 
 const ALL = "\u0000all";
 const REPO_HEADER_HEIGHT = 34;
-const COMMIT_HEIGHT = 136;
 
 type Item =
-  | { kind: "repo"; repo: string; label: string; status: Repo; expanded: boolean }
-  | { kind: "commit"; repo: string; status: Repo }
+  | { kind: "repo"; repo: string; label: string; status: Repo; expanded: boolean; target: boolean }
   | { kind: "section"; repo: string; section: Section; count: number; collapsed: boolean }
   | { kind: "file"; repo: string; section: Section; change: Change }
   | { kind: "clean"; repo: string };
@@ -37,6 +35,7 @@ interface Notice {
 
 const drafts = new Map<string, string>();
 const groupChoice = new Map<string, string>();
+const targetChoice = new Map<string, string>();
 const expandedRepos = new Map<string, Map<string, boolean>>();
 const collapsedSections = new Map<string, Set<string>>();
 
@@ -65,7 +64,6 @@ function joinPath(repo: string, path: string): string {
 
 function heightOf(item: Item): number {
   if (item.kind === "repo") return REPO_HEADER_HEIGHT;
-  if (item.kind === "commit") return COMMIT_HEIGHT;
   return ROW_HEIGHT;
 }
 
@@ -73,8 +71,6 @@ function keyOf(item: Item): string {
   switch (item.kind) {
     case "repo":
       return `r:${item.repo}`;
-    case "commit":
-      return `c:${item.repo}`;
     case "clean":
       return `n:${item.repo}`;
     case "section":
@@ -188,13 +184,33 @@ export function GitView({
     [expanded, visibleRepos.length],
   );
 
+  const [targetState, setTargetState] = useState<string | null>(() => targetChoice.get(environmentId) ?? null);
+  const target =
+    visibleRepos.find((r) => r.repo === targetState) ??
+    visibleRepos.find((r) => r.status.files.length > 0) ??
+    visibleRepos[0] ??
+    null;
+  const setTarget = useCallback(
+    (repo: string) => {
+      targetChoice.set(environmentId, repo);
+      setTargetState(repo);
+    },
+    [environmentId],
+  );
+
   const items = useMemo(() => {
     const out: Item[] = [];
     for (const { repo, status } of visibleRepos) {
       const open = isExpanded(repo, status);
-      out.push({ kind: "repo", repo, label: labelFor(repo), status, expanded: open });
+      out.push({
+        kind: "repo",
+        repo,
+        label: labelFor(repo),
+        status,
+        expanded: open,
+        target: visibleRepos.length > 1 && repo === target?.repo,
+      });
       if (!open) continue;
-      out.push({ kind: "commit", repo, status });
       if (status.files.length === 0) {
         out.push({ kind: "clean", repo });
         continue;
@@ -212,7 +228,7 @@ export function GitView({
       }
     }
     return out;
-  }, [visibleRepos, isExpanded, labelFor, collapsed]);
+  }, [visibleRepos, isExpanded, labelFor, collapsed, target?.repo]);
 
   const toggleRepo = useCallback(
     (repo: string, current: boolean) => {
@@ -224,6 +240,14 @@ export function GitView({
       });
     },
     [environmentId],
+  );
+
+  const selectRepo = useCallback(
+    (repo: string, expandedNow: boolean) => {
+      setTarget(repo);
+      if (!expandedNow) toggleRepo(repo, false);
+    },
+    [setTarget, toggleRepo],
   );
 
   const toggleSection = useCallback(
@@ -342,27 +366,16 @@ export function GitView({
                   label={item.label}
                   status={item.status}
                   expanded={item.expanded}
+                  target={item.target}
                   busy={repoBusy}
                   onToggle={toggleRepo}
+                  onSelect={selectRepo}
                   onPush={actions.push}
                   onPull={actions.pull}
                 />
               );
-            case "commit":
-              return (
-                <CommitBox
-                  key={`${environmentId}:${item.repo}`}
-                  draftKey={`${environmentId}\u0000${item.repo}`}
-                  repo={item.repo}
-                  status={item.status}
-                  busy={repoBusy}
-                  notice={notices.get(item.repo) ?? null}
-                  onCommit={actions.commit}
-                  onStageAll={actions.stage}
-                />
-              );
             case "clean":
-              return <p className="flex h-full items-center pl-8 text-xs text-muted-foreground">No changes.</p>;
+              return <p className="flex h-full items-center pl-8 text-xs text-muted-foreground">No changes</p>;
             case "section":
               return (
                 <SectionHeader
@@ -395,6 +408,20 @@ export function GitView({
           }
         }}
       />
+      {target === null ? null : (
+        <CommitBar
+          key={`${environmentId}\u0000${target.repo}`}
+          draftKey={`${environmentId}\u0000${target.repo}`}
+          repos={visibleRepos.map((r) => ({ repo: r.repo, label: labelFor(r.repo), changes: r.status.files.length }))}
+          target={target.repo}
+          targetLabel={labelFor(target.repo)}
+          status={target.status}
+          busy={busy.get(target.repo) ?? null}
+          notice={notices.get(target.repo) ?? null}
+          onTarget={setTarget}
+          onCommit={actions.commit}
+        />
+      )}
     </div>
   );
 }
@@ -404,8 +431,10 @@ const RepoHeader = memo(function RepoHeader({
   label,
   status,
   expanded,
+  target,
   busy,
   onToggle,
+  onSelect,
   onPush,
   onPull,
 }: {
@@ -413,94 +442,125 @@ const RepoHeader = memo(function RepoHeader({
   label: string;
   status: Repo;
   expanded: boolean;
+  target: boolean;
   busy: string | null;
   onToggle: (repo: string, current: boolean) => void;
+  onSelect: (repo: string, expanded: boolean) => void;
   onPush: (repo: string) => void;
   onPull: (repo: string) => void;
 }) {
-  let add = 0;
-  let del = 0;
-  for (const f of status.files) {
-    add += f.add ?? 0;
-    del += f.del ?? 0;
-  }
+  const publish = status.upstream === null;
   return (
     <div
       role="button"
       tabIndex={0}
-      aria-expanded={expanded}
-      title={`${repo === "" ? "." : repo}${status.upstream === null ? "" : ` → ${status.upstream}`}`}
-      onClick={() => onToggle(repo, expanded)}
+      aria-pressed={target}
+      title={`${repo === "" ? "." : repo}${publish ? " · no upstream" : ` → ${status.upstream}`}`}
+      onClick={() => onSelect(repo, expanded)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onToggle(repo, expanded);
+          onSelect(repo, expanded);
         }
       }}
-      className="flex h-full cursor-pointer items-center gap-1.5 border-t border-border px-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
+      className={cn(
+        "mx-1 mt-1 flex h-[30px] items-center gap-1.5 rounded-md pl-0.5 pr-1.5 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
+        target && "bg-state-active hover:bg-state-active",
+      )}
     >
-      <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0 text-muted-foreground" />
+      <button
+        type="button"
+        aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
+        aria-expanded={expanded}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggle(repo, expanded);
+        }}
+        className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+      >
+        <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
+      </button>
       <span className="min-w-0 shrink truncate font-semibold">{label}</span>
       <Icon name="GitBranch" className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
         {status.branch ?? "detached"}
       </span>
-      {status.files.length > 0 ? (
-        <span className="shrink-0 rounded-full bg-secondary px-1.5 text-xs text-muted-foreground">
-          {status.files.length}
-        </span>
+      {status.behind > 0 ? (
+        <SyncButton
+          icon="ArrowDown"
+          count={status.behind}
+          title={`Pull ${status.behind} commit${status.behind === 1 ? "" : "s"} (fast-forward only)`}
+          spinning={busy === "pull"}
+          disabled={busy !== null}
+          onClick={() => onPull(repo)}
+        />
       ) : null}
-      {status.files.length > 0 ? (
-        <span className="shrink-0 font-mono text-xs">
-          <span className="text-diff-added">+{add}</span> <span className="text-diff-removed">-{del}</span>
-        </span>
+      {status.ahead > 0 || publish ? (
+        <SyncButton
+          icon="ArrowUp"
+          count={publish ? null : status.ahead}
+          title={publish ? "Publish branch (push and set upstream)" : `Push ${status.ahead} commit${status.ahead === 1 ? "" : "s"}`}
+          spinning={busy === "push"}
+          disabled={busy !== null}
+          onClick={() => onPush(repo)}
+        />
       ) : null}
-      <button
-        type="button"
-        className="flex shrink-0 items-center gap-0.5 rounded px-1 font-mono text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-50"
-        title="Pull (fast-forward only)"
-        disabled={busy !== null || status.upstream === null}
-        onClick={(event) => {
-          event.stopPropagation();
-          onPull(repo);
-        }}
-      >
-        <Icon name={busy === "pull" ? "Spinner" : "ArrowDown"} className={cn("size-3.5", busy === "pull" && "animate-spin")} />
-        {status.behind}
-      </button>
-      <button
-        type="button"
-        className="flex shrink-0 items-center gap-0.5 rounded px-1 font-mono text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-50"
-        title={status.upstream === null ? "Push and set upstream" : "Push"}
-        disabled={busy !== null}
-        onClick={(event) => {
-          event.stopPropagation();
-          onPush(repo);
-        }}
-      >
-        <Icon name={busy === "push" ? "Spinner" : "ArrowUp"} className={cn("size-3.5", busy === "push" && "animate-spin")} />
-        {status.ahead}
-      </button>
     </div>
   );
 });
 
-function CommitBox({
+function SyncButton({
+  icon,
+  count,
+  title,
+  spinning,
+  disabled,
+  onClick,
+}: {
+  icon: string;
+  count: number | null;
+  title: string;
+  spinning: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      className="flex h-6 shrink-0 items-center gap-0.5 rounded px-1.5 font-mono text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-50"
+    >
+      <Icon name={spinning ? "Spinner" : icon} className={cn("size-3.5", spinning && "animate-spin")} />
+      {count === null ? <span className="font-sans">Publish</span> : count}
+    </button>
+  );
+}
+
+function CommitBar({
   draftKey,
-  repo,
+  repos,
+  target,
+  targetLabel,
   status,
   busy,
   notice,
+  onTarget,
   onCommit,
-  onStageAll,
 }: {
   draftKey: string;
-  repo: string;
+  repos: Array<{ repo: string; label: string; changes: number }>;
+  target: string;
+  targetLabel: string;
   status: Repo;
   busy: string | null;
   notice: Notice | null;
+  onTarget: (repo: string) => void;
   onCommit: (repo: string, message: string, stagedCount: number) => Promise<boolean>;
-  onStageAll: (repo: string, paths: string[]) => void;
 }) {
   const [message, setMessageState] = useState(() => drafts.get(draftKey) ?? "");
   const setMessage = (value: string) => {
@@ -508,11 +568,12 @@ function CommitBox({
     setMessageState(value);
   };
   const stagedCount = status.files.filter(isStaged).length;
-  const unstaged = status.files.filter(isUnstaged);
+  const total = status.files.length;
+  const mac = navigator.platform.startsWith("Mac");
   const commit = async () => {
     const text = message.trim();
-    if (text === "" || busy !== null) return;
-    if (await onCommit(repo, text, stagedCount)) setMessage("");
+    if (text === "" || busy !== null || total === 0) return;
+    if (await onCommit(target, text, stagedCount)) setMessage("");
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -520,46 +581,71 @@ function CommitBox({
       void commit();
     }
   };
+  const label =
+    total === 0
+      ? "Nothing to commit"
+      : stagedCount > 0
+        ? `Commit ${stagedCount} staged file${stagedCount === 1 ? "" : "s"}`
+        : `Commit all ${total} file${total === 1 ? "" : "s"}`;
   return (
-    <div className="flex h-full flex-col gap-1.5 px-3 pb-1 pt-1.5">
+    <div className="shrink-0 border-t border-border bg-background px-3 pb-3 pt-2.5">
+      <div className="mb-2 flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Commit to</span>
+        {repos.length > 1 ? (
+          <span className="relative min-w-0">
+            <select
+              value={target}
+              onChange={(event) => onTarget(event.target.value)}
+              aria-label="Repository to commit to"
+              className="h-6 max-w-[180px] appearance-none truncate rounded-full bg-secondary pl-2.5 pr-6 text-xs font-medium text-secondary-foreground hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {repos.map((r) => (
+                <option key={r.repo} value={r.repo}>
+                  {r.label}
+                  {r.changes > 0 ? ` (${r.changes})` : ""}
+                </option>
+              ))}
+            </select>
+            <Icon
+              name="ChevronDown"
+              className="pointer-events-none absolute right-1.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
+            />
+          </span>
+        ) : (
+          <span className="truncate font-medium">{targetLabel}</span>
+        )}
+        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{status.branch ?? "detached"}</span>
+        <span className="shrink-0 text-muted-foreground">{mac ? "⌘↵" : "Ctrl+↵"}</span>
+      </div>
       <textarea
         value={message}
         onChange={(event) => setMessage(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder={`Message (${navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl"}+Enter to commit)`}
-        className="h-[60px] w-full shrink-0 resize-none rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        placeholder="Message"
+        rows={2}
+        className="block max-h-40 min-h-[52px] w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       />
-      <div className="flex shrink-0 gap-2">
-        <Button
-          size="sm"
-          className="h-7 flex-1"
-          disabled={busy !== null || message.trim() === "" || status.files.length === 0}
-          onClick={() => void commit()}
-        >
-          <Icon name={busy === "commit" ? "Spinner" : "Check"} className={cn(busy === "commit" && "animate-spin")} />
-          {stagedCount === 0 ? "Commit All" : "Commit"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 flex-1"
-          disabled={busy !== null || unstaged.length === 0}
-          onClick={() => onStageAll(repo, unstaged.map((c) => c.path))}
-        >
-          <Icon name="Plus" />
-          Stage All
-        </Button>
-      </div>
-      <p
-        role={notice?.tone === "error" ? "alert" : "status"}
-        title={notice?.text}
-        className={cn(
-          "h-4 shrink-0 truncate text-xs",
-          notice?.tone === "error" ? "text-destructive" : "text-muted-foreground",
-        )}
+      <Button
+        size="sm"
+        className="mt-2 h-8 w-full"
+        disabled={busy !== null || message.trim() === "" || total === 0}
+        onClick={() => void commit()}
       >
-        {notice?.text ?? (status.truncated ? `Showing the first ${status.files.length} changes.` : "")}
-      </p>
+        <Icon name={busy === "commit" ? "Spinner" : "Check"} className={cn(busy === "commit" && "animate-spin")} />
+        <span className="truncate">{label}</span>
+      </Button>
+      {notice !== null || status.truncated ? (
+        <p
+          role={notice?.tone === "error" ? "alert" : "status"}
+          title={notice?.text}
+          className={cn(
+            "mt-1.5 line-clamp-2 break-words text-xs",
+            notice?.tone === "error" ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
+          {notice?.text ?? `Showing the first ${total} changes.`}
+        </p>
+      ) : null}
     </div>
   );
 }
