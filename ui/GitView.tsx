@@ -14,9 +14,32 @@ type Repo = Extract<RepoStatus["status"], { repo: true }>;
 
 const ALL = "\u0000all";
 const REPO_HEADER_HEIGHT = 34;
+const REPO_HEADER_GAP = 12;
+const REPO_HUES = [250, 150, 30, 300, 195, 75, 340, 110];
+const GUIDE_LEFT = 17;
+
+function repoHue(repo: string): number {
+  let hash = 0;
+  for (let i = 0; i < repo.length; i += 1) hash = (hash * 31 + repo.charCodeAt(i)) | 0;
+  return REPO_HUES[Math.abs(hash) % REPO_HUES.length] ?? 250;
+}
+
+function repoColor(repo: string, alpha = 1): string {
+  return `oklch(0.72 0.14 ${repoHue(repo)} / ${alpha})`;
+}
+
+function RepoGuide({ repo }: { repo: string }) {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-y-0 w-0.5 rounded-full"
+      style={{ left: GUIDE_LEFT, background: repoColor(repo, 0.45) }}
+    />
+  );
+}
 
 type Item =
-  | { kind: "repo"; repo: string; label: string; status: Repo; expanded: boolean; target: boolean }
+  | { kind: "repo"; repo: string; label: string; status: Repo; expanded: boolean; target: boolean; first: boolean }
   | { kind: "section"; repo: string; section: Section; count: number; collapsed: boolean }
   | { kind: "file"; repo: string; section: Section; change: Change }
   | { kind: "clean"; repo: string };
@@ -63,7 +86,7 @@ function joinPath(repo: string, path: string): string {
 }
 
 function heightOf(item: Item): number {
-  if (item.kind === "repo") return REPO_HEADER_HEIGHT;
+  if (item.kind === "repo") return item.first ? REPO_HEADER_HEIGHT : REPO_HEADER_HEIGHT + REPO_HEADER_GAP;
   return ROW_HEIGHT;
 }
 
@@ -97,15 +120,12 @@ export function GitView({
   const [busy, setBusy] = useState<Map<string, string>>(() => new Map());
   const [notices, setNotices] = useState<Map<string, Notice>>(() => new Map());
   const [selected, setSelected] = useState<Selected | null>(null);
-  const [expanded, setExpanded] = useState<Map<string, boolean>>(
-    () => expandedRepos.get(environmentId) ?? new Map(),
-  );
+  const [expanded, setExpanded] = useState<Map<string, boolean>>(() => expandedRepos.get(environmentId) ?? new Map());
   const [collapsed, setCollapsed] = useState<Set<string>>(() => collapsedSections.get(environmentId) ?? new Set());
   const [choice, setChoiceState] = useState<string | null>(() => groupChoice.get(environmentId) ?? null);
 
   const repos = useMemo(
-    () =>
-      (workspace?.repos ?? []).flatMap((r) => (r.status.repo ? [{ repo: r.repo, status: r.status }] : [])),
+    () => (workspace?.repos ?? []).flatMap((r) => (r.status.repo ? [{ repo: r.repo, status: r.status }] : [])),
     [workspace],
   );
 
@@ -131,11 +151,7 @@ export function GitView({
   }, [repos, workspace?.name]);
 
   const group =
-    choice === ALL
-      ? ALL
-      : choice !== null && groups.some((g) => g.key === choice)
-        ? choice
-        : (groups[0]?.key ?? ALL);
+    choice === ALL ? ALL : choice !== null && groups.some((g) => g.key === choice) ? choice : (groups[0]?.key ?? ALL);
 
   const folderOptions = useMemo<FolderOption[]>(() => {
     const total = groups.reduce((sum, g) => sum + g.changes, 0);
@@ -209,6 +225,7 @@ export function GitView({
         status,
         expanded: open,
         target: visibleRepos.length > 1 && repo === target?.repo,
+        first: out.length === 0,
       });
       if (!open) continue;
       if (status.files.length === 0) {
@@ -275,7 +292,8 @@ export function GitView({
       try {
         const result = await action();
         const text =
-          success ?? (label === "push" || label === "pull" ? result.output.split("\n").slice(-2).join(" ") || "Done." : null);
+          success ??
+          (label === "push" || label === "pull" ? result.output.split("\n").slice(-2).join(" ") || "Done." : null);
         if (text !== null) setNotices((prev) => new Map(prev).set(repo, { tone: "info", text }));
         return true;
       } catch (cause) {
@@ -367,6 +385,8 @@ export function GitView({
                   status={item.status}
                   expanded={item.expanded}
                   target={item.target}
+                  first={item.first}
+                  multi={visibleRepos.length > 1}
                   busy={repoBusy}
                   onToggle={toggleRepo}
                   onSelect={selectRepo}
@@ -375,7 +395,12 @@ export function GitView({
                 />
               );
             case "clean":
-              return <p className="flex h-full items-center pl-8 text-xs text-muted-foreground">No changes</p>;
+              return (
+                <p className="relative flex h-full items-center pl-11 text-xs text-muted-foreground">
+                  <RepoGuide repo={item.repo} />
+                  No changes
+                </p>
+              );
             case "section":
               return (
                 <SectionHeader
@@ -432,6 +457,8 @@ const RepoHeader = memo(function RepoHeader({
   status,
   expanded,
   target,
+  first,
+  multi,
   busy,
   onToggle,
   onSelect,
@@ -443,6 +470,8 @@ const RepoHeader = memo(function RepoHeader({
   status: Repo;
   expanded: boolean;
   target: boolean;
+  first: boolean;
+  multi: boolean;
   busy: string | null;
   onToggle: (repo: string, current: boolean) => void;
   onSelect: (repo: string, expanded: boolean) => void;
@@ -450,61 +479,79 @@ const RepoHeader = memo(function RepoHeader({
   onPull: (repo: string) => void;
 }) {
   const publish = status.upstream === null;
+  const color = repoColor(repo);
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-pressed={target}
-      title={`${repo === "" ? "." : repo}${publish ? " · no upstream" : ` → ${status.upstream}`}`}
-      onClick={() => onSelect(repo, expanded)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect(repo, expanded);
-        }
-      }}
-      className={cn(
-        "mx-1 mt-1 flex h-[30px] items-center gap-1.5 rounded-md pl-0.5 pr-1.5 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
-        target && "bg-state-active hover:bg-state-active",
-      )}
-    >
-      <button
-        type="button"
-        aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
-        aria-expanded={expanded}
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggle(repo, expanded);
+    <div className="flex h-full flex-col justify-end">
+      {first ? null : <div aria-hidden className="mx-3 mb-auto mt-1.5 h-px bg-border" />}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={target}
+        title={`${repo === "" ? "." : repo}${publish ? " · no upstream" : ` → ${status.upstream}`}`}
+        onClick={() => onSelect(repo, expanded)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect(repo, expanded);
+          }
         }}
-        className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+        className={cn(
+          "relative mx-1 flex h-[30px] shrink-0 items-center gap-1.5 rounded-md pl-0.5 pr-1.5 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
+          target && "bg-state-active hover:bg-state-active",
+        )}
+        style={target ? { boxShadow: `inset 2px 0 0 ${color}` } : undefined}
       >
-        <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
-      </button>
-      <span className="min-w-0 shrink truncate font-semibold">{label}</span>
-      <Icon name="GitBranch" className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-        {status.branch ?? "detached"}
-      </span>
-      {status.behind > 0 ? (
-        <SyncButton
-          icon="ArrowDown"
-          count={status.behind}
-          title={`Pull ${status.behind} commit${status.behind === 1 ? "" : "s"} (fast-forward only)`}
-          spinning={busy === "pull"}
-          disabled={busy !== null}
-          onClick={() => onPull(repo)}
-        />
-      ) : null}
-      {status.ahead > 0 || publish ? (
-        <SyncButton
-          icon="ArrowUp"
-          count={publish ? null : status.ahead}
-          title={publish ? "Publish branch (push and set upstream)" : `Push ${status.ahead} commit${status.ahead === 1 ? "" : "s"}`}
-          spinning={busy === "push"}
-          disabled={busy !== null}
-          onClick={() => onPush(repo)}
-        />
-      ) : null}
+        <button
+          type="button"
+          aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
+          aria-expanded={expanded}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle(repo, expanded);
+          }}
+          className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+        >
+          <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
+        </button>
+        {multi ? (
+          <span
+            aria-hidden
+            className="flex size-5 shrink-0 items-center justify-center rounded-md text-xs font-bold uppercase"
+            style={{ background: repoColor(repo, 0.18), color }}
+          >
+            {label.replace(/^\./u, "").slice(0, 1) || "·"}
+          </span>
+        ) : null}
+        <span className="min-w-0 shrink truncate font-semibold">{label}</span>
+        <Icon name="GitBranch" className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+          {status.branch ?? "detached"}
+        </span>
+        {status.behind > 0 ? (
+          <SyncButton
+            icon="ArrowDown"
+            count={status.behind}
+            title={`Pull ${status.behind} commit${status.behind === 1 ? "" : "s"} (fast-forward only)`}
+            spinning={busy === "pull"}
+            disabled={busy !== null}
+            onClick={() => onPull(repo)}
+          />
+        ) : null}
+        {status.ahead > 0 || publish ? (
+          <SyncButton
+            icon="ArrowUp"
+            count={publish ? null : status.ahead}
+            title={
+              publish
+                ? "Publish branch (push and set upstream)"
+                : `Push ${status.ahead} commit${status.ahead === 1 ? "" : "s"}`
+            }
+            spinning={busy === "push"}
+            disabled={busy !== null}
+            onClick={() => onPush(repo)}
+          />
+        ) : null}
+      </div>
     </div>
   );
 });
@@ -755,35 +802,48 @@ const SectionHeader = memo(function SectionHeader({
           onToggle(repo, section);
         }
       }}
-      className="ml-4 mr-1 flex h-full cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:bg-state-hover hover:text-foreground"
+      className="relative flex h-full cursor-pointer items-center pr-1"
     >
-      <Icon name={collapsed ? "ChevronRight" : "ChevronDown"} className="size-3.5" />
-      <span>{section === "staged" ? "Staged" : "Changes"}</span>
-      <span className="font-normal">{count}</span>
-      <span className="flex-1" />
-      {section === "staged" ? (
-        <IconAction
-          icon="Minus"
-          title="Unstage all"
-          disabled={disabled}
-          onClick={() => onUnstage(repo, files.filter(isStaged).map((c) => c.path))}
-        />
-      ) : (
-        <>
-          <ConfirmButton
-            icon="RotateCcw"
-            title="Discard all changes"
-            disabled={disabled}
-            onConfirm={() => onDiscard(repo, files.filter(isUnstaged))}
-          />
+      <RepoGuide repo={repo} />
+      <span className="ml-6 flex h-full flex-1 items-center gap-1 rounded-md px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:bg-state-hover hover:text-foreground">
+        <Icon name={collapsed ? "ChevronRight" : "ChevronDown"} className="size-3.5" />
+        <span>{section === "staged" ? "Staged" : "Changes"}</span>
+        <span className="font-normal">{count}</span>
+        <span className="flex-1" />
+        {section === "staged" ? (
           <IconAction
-            icon="Plus"
-            title="Stage all"
+            icon="Minus"
+            title="Unstage all"
             disabled={disabled}
-            onClick={() => onStage(repo, files.filter(isUnstaged).map((c) => c.path))}
+            onClick={() =>
+              onUnstage(
+                repo,
+                files.filter(isStaged).map((c) => c.path),
+              )
+            }
           />
-        </>
-      )}
+        ) : (
+          <>
+            <ConfirmButton
+              icon="RotateCcw"
+              title="Discard all changes"
+              disabled={disabled}
+              onConfirm={() => onDiscard(repo, files.filter(isUnstaged))}
+            />
+            <IconAction
+              icon="Plus"
+              title="Stage all"
+              disabled={disabled}
+              onClick={() =>
+                onStage(
+                  repo,
+                  files.filter(isUnstaged).map((c) => c.path),
+                )
+              }
+            />
+          </>
+        )}
+      </span>
     </div>
   );
 });
@@ -813,8 +873,7 @@ const FileRow = memo(function FileRow({
   const tone = badgeClass(badge);
   const { name, dir } = splitName(change.path);
   const deleted = badge === "D";
-  const select = () =>
-    onSelect({ repo, path: change.path, staged: section === "staged", untracked: change.x === "?" });
+  const select = () => onSelect({ repo, path: change.path, staged: section === "staged", untracked: change.x === "?" });
   return (
     <div
       role="button"
@@ -824,8 +883,9 @@ const FileRow = memo(function FileRow({
       onKeyDown={(event) => {
         if (event.key === "Enter") select();
       }}
-      className="group flex h-full cursor-pointer items-center gap-1.5 pl-9 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
+      className="group relative flex h-full cursor-pointer items-center gap-1.5 pl-11 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
     >
+      <RepoGuide repo={repo} />
       <FileIcon name={name} className={cn(deleted && "opacity-50")} />
       <span className={cn("shrink-0", deleted && "line-through")}>{name}</span>
       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{dir}</span>
