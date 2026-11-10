@@ -162,6 +162,32 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
     },
     show: { input: z.object({ ...repo, sha: shaSchema }), output: showOutput },
     branches: { input: z.object(repo), output: branchesOutput },
+    applyHunk: {
+      input: z.object({
+        ...repo,
+        patch: z
+          .string()
+          .min(1)
+          .max(2 * 1024 * 1024),
+        mode: z.enum(["stage", "unstage", "discard"]),
+      }),
+      output: ok,
+    },
+    createPr: {
+      input: z.object({ ...repo, base: refName }),
+      output: z.object({ url: z.string().nullable(), pushed: z.boolean(), remote: z.string().nullable() }),
+    },
+    commitContext: {
+      input: z.object(repo),
+      output: z.object({
+        stagedOnly: z.boolean(),
+        stat: z.string(),
+        patch: z.string(),
+        truncated: z.boolean(),
+        recent: z.array(z.string()),
+        branch: z.string().nullable(),
+      }),
+    },
     compare: { input: z.object({ ...repo, base: refName }), output: compareOutput },
     compareDiff: {
       input: z.object({ ...repo, base: refName, path: relPath.min(1) }),
@@ -176,8 +202,24 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
   });
 }
 
-export const hostContract = contractFor({ root });
-export const rpcContract = contractFor({ environmentId: z.string().min(1) });
+export const hostContract = {
+  ...contractFor({ root }),
+  ...defineRpcContract({
+    claudeCli: {
+      input: z.object({ root, prompt: z.string().min(1).max(400_000) }),
+      output: z.object({ available: z.boolean(), text: z.string() }),
+    },
+  }),
+};
+export const rpcContract = {
+  ...contractFor({ environmentId: z.string().min(1) }),
+  ...defineRpcContract({
+    suggestMessage: {
+      input: z.object({ environmentId: z.string().min(1), repo: relPath }),
+      output: z.object({ message: z.string(), source: z.enum(["api", "cli"]) }),
+    },
+  }),
+};
 
 export const CHANGED_CHANNEL = "changed";
 

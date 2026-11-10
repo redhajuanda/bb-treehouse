@@ -3,7 +3,7 @@
 A [bb](https://getbb.app) plugin that adds a **Files** tab to every thread's side panel, with three views:
 
 - **Files**: a file tree with a searchable folder picker (the workspace, every folder that holds git repositories such as `.worktrees/feature-x`, and every repository). Picking one roots the tree and **Find files** there. Git badges (`M`, `U`, `A`, `D`) and coloured names come from whichever repository each file belongs to. Ignored entries are judged by the repository that contains them: a folder that is its own repository is never shown as ignored, and inside an ignored folder only the folder itself carries the mark. The eye button hides ignored entries entirely. Click a file to open it in bb's preview.
-- **Diff**: a searchable folder picker listing **All repositories** and every folder that directly holds git repositories (for example `.worktrees/feature-x`, `.claude/worktrees/fix-y`, `repositories`). Repositories are found anywhere in the workspace up to 4 levels deep, skipping `node_modules`, build output and `.git`. Each repository is a collapsible section showing its branch, plus pull/push buttons only when it is behind or ahead (or **Publish** when the branch has no upstream). Inside are Staged and Changes lists with per-file stage, unstage, discard (click twice to confirm) and open; click a file to open its diff in its own panel tab (it refreshes as the file changes). Each expanded repository has its own message field (Ctrl/⌘+Enter commits) and a **Commit** button that commits the staged files, or stages and commits everything when nothing is staged; its ▾ menu adds **Commit & Push** and **Amend Last Commit**. Pull is fast-forward only. Each repository also has a **Compare with** section: pick a base branch (nothing is compared until you pick one; the picker searches local and remote branches and lists the repository's main branch first) to see how far the current branch is ahead/behind it and every file it changed since they diverged (`base...HEAD`, committed work only), each opening its diff in a tab.
+- **Diff**: a searchable folder picker listing **All repositories** and every folder that directly holds git repositories (for example `.worktrees/feature-x`, `.claude/worktrees/fix-y`, `repositories`). Repositories are found anywhere in the workspace up to 4 levels deep, skipping `node_modules`, build output and `.git`. Each repository is a collapsible section showing its branch, plus pull/push buttons only when it is behind or ahead (or **Publish** when the branch has no upstream). Inside are Staged and Changes lists with per-file stage, unstage, discard (click twice to confirm) and open; click a file to open its diff in its own panel tab (it refreshes as the file changes). Each expanded repository has its own message field (Ctrl/⌘+Enter commits; the ✨ button writes the message with Claude from the staged diff, or from all changes when nothing is staged) and a **Commit** button that commits the staged files, or stages and commits everything when nothing is staged; its ▾ menu adds **Commit & Push** and **Amend Last Commit**. Pull is fast-forward only. Each repository also has a **Compare with** section: pick a base branch (nothing is compared until you pick one; the picker searches local and remote branches and lists the repository's main branch first) to see how far the current branch is ahead/behind it and every file it changed since they diverged (`base...HEAD`, committed work only), each opening its diff in a tab. When the branch is ahead, **Create PR** pushes it (setting the upstream if needed) and opens the new pull request / merge request page for GitHub, GitLab (including self-hosted) or Bitbucket. In a file's diff tab every hunk has **Stage hunk** and **Discard** (working tree) or **Unstage hunk** (staged).
 
 - **Graph**: a commit graph for one repository at a time (defaults to the workspace's own repository; the picker lists every repository found). Coloured lanes show branches and merges; each commit shows the author's initials, message, branch/tag badges (the checked-out branch in blue), short hash and relative date. Switch between **All branches** and the current branch, filter loaded commits by message, author, hash or branch, and load 300 more at a time. Click a commit to open it in its own tab with each changed file's diff (merges are shown against their first parent).
 
@@ -40,6 +40,16 @@ bb plugin install . --yes
 
 Then open the side panel in any thread and pick **Files**.
 
+## ✨ Commit messages
+
+Treehouse asks Claude Opus 5.5 (low effort) for a one-line summary in your repository's commit style, plus a short body when the change needs one. It uses, in order:
+
+1. the **Anthropic API key** in Treehouse's settings (`bb plugin config treehouse set anthropicApiKey <key>`; stored as a secret on the bb server),
+2. the bb server's own Anthropic credentials (`ANTHROPIC_API_KEY` or an `ant auth login` profile),
+3. the `claude` CLI on the workspace's machine.
+
+Requests opt into the API's server-side refusal fallback. Diffs over 120 KB are cut off; the diffstat still lists every file.
+
 ## CLI
 
 ```sh
@@ -59,5 +69,8 @@ Find an environment id with `bb status` inside a thread.
 ## Development
 
 ```sh
-bb plugin dev .
+npm install
+npm test          # vitest against real temporary git repositories
+npm run typecheck
+bb plugin dev .   # rebuild and reload on save
 ```

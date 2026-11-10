@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { CommitDetail, CommitFile } from "../contract";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "./graph";
+import { splitHunks } from "./hunks";
 import { z } from "zod";
 import {
   experimental_Diff as Diff,
@@ -148,7 +149,12 @@ function DiffView({ environmentId, params }: { environmentId: string; params: Fi
         ) : result.patch === "" ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">No changes left in this file.</p>
         ) : (
-          <Diff patch={result.patch} path={path} />
+          <HunkList
+            patch={result.patch}
+            path={path}
+            mode={compareBase !== null || untracked ? null : staged ? "staged" : "worktree"}
+            onApply={(patch, action) => rpc.call("applyHunk", { environmentId, repo, patch, mode: action })}
+          />
         )}
       </div>
     </div>
@@ -282,5 +288,106 @@ function CommitFileSection({ file, open, onToggle }: { file: CommitFile; open: b
         )
       ) : null}
     </section>
+  );
+}
+
+type HunkAction = "stage" | "unstage" | "discard";
+
+function HunkList({
+  patch,
+  path,
+  mode,
+  onApply,
+}: {
+  patch: string;
+  path: string;
+  mode: "worktree" | "staged" | null;
+  onApply: (patch: string, action: HunkAction) => Promise<unknown>;
+}) {
+  const hunks = splitHunks(patch);
+  const [pending, setPending] = useState<number | null>(null);
+  const [armed, setArmed] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (armed === null) return;
+    const timer = setTimeout(() => setArmed(null), 3000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+  if (mode === null || hunks.length === 0) return <Diff patch={patch} path={path} />;
+  const apply = async (index: number, action: HunkAction) => {
+    const hunk = hunks[index];
+    if (hunk === undefined) return;
+    setPending(index);
+    setError(null);
+    try {
+      await onApply(hunk.patch, action);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setPending(null);
+      setArmed(null);
+    }
+  };
+  const button =
+    "flex h-6 items-center gap-1 rounded-md px-2 text-xs hover:bg-state-hover hover:text-foreground disabled:opacity-50";
+  return (
+    <div>
+      {error === null ? null : (
+        <p role="alert" className="border-b border-border px-4 py-2 text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      {hunks.map((hunk, index) => (
+        <section key={`${index}:${hunk.header}`} className="border-b border-border">
+          <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background px-3 py-1">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">{hunk.header}</span>
+            {mode === "worktree" ? (
+              <>
+                <button
+                  type="button"
+                  disabled={pending !== null}
+                  onClick={() => (armed === index ? void apply(index, "discard") : setArmed(index))}
+                  className={cn(
+                    button,
+                    armed === index
+                      ? "bg-destructive text-destructive-foreground hover:bg-destructive hover:text-destructive-foreground"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  <Icon name={armed === index ? "Check" : "RotateCcw"} className="size-3.5" />
+                  {armed === index ? "Confirm discard" : "Discard"}
+                </button>
+                <button
+                  type="button"
+                  disabled={pending !== null}
+                  onClick={() => void apply(index, "stage")}
+                  className={cn(button, "text-muted-foreground")}
+                >
+                  <Icon
+                    name={pending === index ? "Spinner" : "Plus"}
+                    className={cn("size-3.5", pending === index && "animate-spin")}
+                  />
+                  Stage hunk
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                disabled={pending !== null}
+                onClick={() => void apply(index, "unstage")}
+                className={cn(button, "text-muted-foreground")}
+              >
+                <Icon
+                  name={pending === index ? "Spinner" : "Minus"}
+                  className={cn("size-3.5", pending === index && "animate-spin")}
+                />
+                Unstage hunk
+              </button>
+            )}
+          </div>
+          <Diff patch={hunk.patch} path={path} />
+        </section>
+      ))}
+    </div>
   );
 }

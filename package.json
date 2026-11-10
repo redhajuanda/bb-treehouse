@@ -17,6 +17,7 @@
     "app": "./app.tsx"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.7.0",
     "@get-bb/plugin-sdk": "0.6.132",
     "@radix-ui/react-checkbox": "^1.4.1",
     "@radix-ui/react-slot": "^1.5.0",
@@ -47,11 +48,16 @@
     "sonner": "^1.7.4",
     "tailwind-merge": "^3.7.0",
     "typescript": "^5.7.0",
-    "vaul": "^1.1.2"
+    "vaul": "^1.1.2",
+    "vitest": "5.1.0"
   },
   "description": "Treehouse: a file tree and git panel for every bb thread",
   "repository": {
     "type": "git",
     "url": "https://github.com/redhajuanda/bb-treehouse"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
   }
 }

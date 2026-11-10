@@ -411,7 +411,7 @@ export function GitView({
         const result = await action();
         const text =
           success ??
-          (label === "push" || label === "pull" ? result.output.split("\n").slice(-2).join(" ") || "Done." : null);
+          (label === "push" || label === "pull" || label === "pr" ? result.output.split("\n").slice(-2).join(" ") || "Done." : null);
         if (text !== null) setNotices((prev) => new Map(prev).set(repo, { tone: "info", text }));
         return true;
       } catch (cause) {
@@ -476,6 +476,37 @@ export function GitView({
         const params: FileDiffParams = { kind: "file", ...value };
         panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: diffTabTitle(params) });
       },
+      suggest: async (repo: string): Promise<string | null> => {
+        setNotices((prev) => {
+          const next = new Map(prev);
+          next.delete(repo);
+          return next;
+        });
+        try {
+          return (await rpc.call("suggestMessage", { environmentId, repo })).message;
+        } catch (cause) {
+          setNotices((prev) => new Map(prev).set(repo, { tone: "error", text: errorMessage(cause) }));
+          return null;
+        }
+      },
+      createPr: (repo: string, base: string) =>
+        void run(
+          repo,
+          "pr",
+          async () => {
+            const result = await rpc.call("createPr", { environmentId, repo, base });
+            if (result.url === null) {
+              throw new Error(
+                "Pushed, but this remote isn't GitHub, GitLab or Bitbucket, so there's no pull request page to open.",
+              );
+            }
+            navigate.openUrl(result.url);
+            return {
+              output: result.pushed ? "Pushed and opened the pull request page." : "Opened the pull request page.",
+            };
+          },
+          undefined,
+        ),
       openCompare: (repo: string, base: string, path: string) => {
         const params: CompareDiffParams = { kind: "compare", repo, base, path };
         panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: compareTabTitle(params) });
@@ -537,6 +568,7 @@ export function GitView({
                   busy={repoBusy}
                   notice={notices.get(item.repo) ?? null}
                   onCommit={actions.commit}
+                  onSuggest={actions.suggest}
                 />
               );
             case "clean":
@@ -557,6 +589,8 @@ export function GitView({
                   state={item.state}
                   onToggle={toggleCompare}
                   onBase={chooseBase}
+                  busy={repoBusy}
+                  onCreatePr={actions.createPr}
                 />
               );
             case "compare-note":
@@ -744,6 +778,7 @@ function CommitBox({
   busy,
   notice,
   onCommit,
+  onSuggest,
 }: {
   draftKey: string;
   repo: string;
@@ -751,8 +786,10 @@ function CommitBox({
   busy: string | null;
   notice: Notice | null;
   onCommit: (repo: string, message: string, stagedCount: number, mode: CommitMode) => Promise<boolean>;
+  onSuggest: (repo: string) => Promise<string | null>;
 }) {
   const [message, setMessageState] = useState(() => drafts.get(draftKey) ?? "");
+  const [suggesting, setSuggesting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const setMessage = (value: string) => {
@@ -803,14 +840,36 @@ function CommitBox({
   return (
     <div className="relative flex h-full flex-col gap-1.5 py-1.5 pl-9 pr-2">
       <RepoGuide repo={repo} />
-      <textarea
-        value={message}
-        onChange={(event) => setMessage(event.target.value)}
-        onKeyDown={onKeyDown}
-        rows={1}
-        placeholder={`Message (${mac ? "⌘↵" : "Ctrl+↵"} to commit on "${branch}")`}
-        className="block h-8 w-full shrink-0 resize-none overflow-hidden rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm leading-[18px] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      />
+      <div className="relative shrink-0">
+        <textarea
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+          disabled={suggesting}
+          placeholder={
+            suggesting ? "Writing a message…" : `Message (${mac ? "⌘↵" : "Ctrl+↵"} to commit on "${branch}")`
+          }
+          className="block h-8 w-full resize-none overflow-hidden rounded-md border border-input bg-transparent py-1.5 pl-2.5 pr-9 text-sm leading-[18px] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-70"
+        />
+        <button
+          type="button"
+          title="Write a commit message with Claude"
+          disabled={suggesting || busy !== null || total === 0}
+          onClick={async () => {
+            setSuggesting(true);
+            const suggestion = await onSuggest(repo);
+            setSuggesting(false);
+            if (suggestion !== null) setMessage(suggestion);
+          }}
+          className="absolute right-1 top-1 flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-40"
+        >
+          <Icon
+            name={suggesting ? "Spinner" : "AiContentGenerator01"}
+            className={cn("size-4", suggesting && "animate-spin")}
+          />
+        </button>
+      </div>
       <div ref={menuRef} className="relative flex h-[30px] shrink-0">
         <button
           type="button"
@@ -1104,6 +1163,8 @@ function CompareHeader({
   state,
   onToggle,
   onBase,
+  busy,
+  onCreatePr,
 }: {
   rpc: Rpc;
   environmentId: string;
@@ -1113,6 +1174,8 @@ function CompareHeader({
   state: CompareState | undefined;
   onToggle: (repo: string, current: boolean) => void;
   onBase: (repo: string, base: string) => void;
+  busy: string | null;
+  onCreatePr: (repo: string, base: string) => void;
 }) {
   const result = state?.status === "ready" ? state.result : null;
   let add = 0;
@@ -1170,6 +1233,24 @@ function CompareHeader({
           </span>
         ) : state?.status === "loading" ? (
           <Icon name="Spinner" className="size-3.5 shrink-0 animate-spin" />
+        ) : null}
+        {base !== null && result !== null && result.found && result.ahead > 0 ? (
+          <button
+            type="button"
+            title={`Push this branch and open a pull request into ${base}`}
+            disabled={busy !== null}
+            onClick={(event) => {
+              event.stopPropagation();
+              onCreatePr(repo, base);
+            }}
+            className="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-[oklch(0.56_0.17_255)] px-2 font-sans text-xs font-medium text-white hover:bg-[oklch(0.51_0.17_255)] disabled:opacity-50"
+          >
+            <Icon
+              name={busy === "pr" ? "Spinner" : "GitPullRequest"}
+              className={cn("size-3.5", busy === "pr" && "animate-spin")}
+            />
+            Create PR
+          </button>
         ) : null}
       </span>
     </div>

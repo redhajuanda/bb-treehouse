@@ -133,7 +133,14 @@ async function listDir(root: string, rel: string) {
       await Promise.all(
         entries.map(async (entry) => {
           if (!ignored.has(`${prefix}${entry.name}`)) return;
-          if (entry.dir && (await fs.access(path.join(dir, entry.name, ".git")).then(() => true, () => false))) return;
+          if (
+            entry.dir &&
+            (await fs.access(path.join(dir, entry.name, ".git")).then(
+              () => true,
+              () => false,
+            ))
+          )
+            return;
           entry.ignored = true;
         }),
       );
@@ -268,9 +275,9 @@ const lsFilesCache = new Map<string, { at: number; paths: Promise<string[]> }>()
 function allFiles(root: string): Promise<string[]> {
   const cached = lsFilesCache.get(root);
   if (cached !== undefined && Date.now() - cached.at < LS_FILES_TTL_MS) return cached.paths;
-  const paths = gitOk(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).then(
-    (out) => [...new Set(out.split("\0").filter(Boolean))],
-  );
+  const paths = gitOk(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).then((out) => [
+    ...new Set(out.split("\0").filter(Boolean)),
+  ]);
   lsFilesCache.set(root, { at: Date.now(), paths });
   paths.catch(() => lsFilesCache.delete(root));
   return paths;
@@ -728,7 +735,8 @@ async function branches(repoRoot: string) {
   const list: Array<{ name: string; remote: boolean }> = [];
   for (const ref of refs.stdout.split("\n")) {
     if (ref.startsWith("refs/heads/")) list.push({ name: ref.slice(11), remote: false });
-    else if (ref.startsWith("refs/remotes/") && !ref.endsWith("/HEAD")) list.push({ name: ref.slice(13), remote: true });
+    else if (ref.startsWith("refs/remotes/") && !ref.endsWith("/HEAD"))
+      list.push({ name: ref.slice(13), remote: true });
   }
   const names = new Set(list.map((b) => b.name));
   const currentName = current.code === 0 ? current.stdout.trim() : null;
@@ -760,10 +768,16 @@ async function compare(repoRoot: string, base: string) {
   const [behind, ahead] = counts.stdout.trim().split(/\s+/u).map(Number);
   const stats = new Map<string, { add: number | null; del: number | null }>();
   if (numstat.code === 0) parseNumstat(numstat.stdout, stats);
-  const files: Array<{ path: string; orig: string | null; status: "A" | "M" | "D" | "R" | "C" | "T"; add: number | null; del: number | null }> = [];
+  const files: Array<{
+    path: string;
+    orig: string | null;
+    status: "A" | "M" | "D" | "R" | "C" | "T";
+    add: number | null;
+    del: number | null;
+  }> = [];
   let truncated = false;
   const parts = nameStatus.stdout.split("\0");
-  for (let i = 0; i < parts.length; ) {
+  for (let i = 0; i < parts.length;) {
     const code = parts[i];
     if (code === undefined || code === "") {
       i += 1;
@@ -799,6 +813,133 @@ async function compareDiff(repoRoot: string, base: string, rel: string) {
   return { patch: out === "" ? "" : `${out}\n`, truncated: false };
 }
 
+export function webRepoUrl(remoteUrl: string): string | null {
+  const trimmed = remoteUrl
+    .trim()
+    .replace(/\.git$/u, "")
+    .replace(/\/+$/u, "");
+  const scp = /^[^@/]+@([^:/]+):(.+)$/u.exec(trimmed);
+  if (scp !== null) return `https://${scp[1]}/${scp[2]}`;
+  try {
+    const parsed = new URL(trimmed);
+    if (!["http:", "https:", "ssh:", "git:"].includes(parsed.protocol)) return null;
+    const pathName = parsed.pathname.replace(/^\/+/u, "");
+    if (pathName === "") return null;
+    return `https://${parsed.hostname}/${pathName}`;
+  } catch {
+    return null;
+  }
+}
+
+export function pullRequestUrl(webUrl: string, head: string, base: string): string {
+  const host = new URL(webUrl).hostname;
+  const enc = encodeURIComponent;
+  if (host.includes("gitlab")) {
+    return `${webUrl}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${enc(head)}&merge_request%5Btarget_branch%5D=${enc(base)}`;
+  }
+  if (host.includes("bitbucket")) {
+    return `${webUrl}/pull-requests/new?source=${enc(head)}&dest=${enc(base)}`;
+  }
+  return `${webUrl}/compare/${base.split("/").map(enc).join("/")}...${head.split("/").map(enc).join("/")}?expand=1`;
+}
+
+async function createPr(repoRoot: string, base: string) {
+  const branch = await git(repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (branch.code !== 0) throw new Error("HEAD is detached; check out a branch first.");
+  const head = branch.stdout.trim();
+  const upstream = await git(repoRoot, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  let remote = upstream.code === 0 ? (upstream.stdout.trim().split("/")[0] ?? "origin") : null;
+  let pushed = false;
+  if (remote === null) {
+    await gitOk(repoRoot, ["push", "-u", "origin", "HEAD"]);
+    remote = "origin";
+    pushed = true;
+  } else {
+    const ahead = await git(repoRoot, ["rev-list", "--count", "@{u}..HEAD"]);
+    if (ahead.code === 0 && Number(ahead.stdout.trim()) > 0) {
+      await gitOk(repoRoot, ["push"]);
+      pushed = true;
+    }
+  }
+  const remoteUrl = await git(repoRoot, ["remote", "get-url", remote]);
+  const web = remoteUrl.code === 0 ? webRepoUrl(remoteUrl.stdout) : null;
+  const remotes = await git(repoRoot, ["remote"]);
+  const baseBranch = remotes.stdout
+    .split("\n")
+    .filter(Boolean)
+    .reduce((name, r) => (name.startsWith(`${r}/`) ? name.slice(r.length + 1) : name), base);
+  return { url: web === null ? null : pullRequestUrl(web, head, baseBranch), pushed, remote: web };
+}
+
+async function applyHunk(repoRoot: string, patch: string, mode: "stage" | "unstage" | "discard") {
+  if (!patch.startsWith("diff --git ") && !patch.startsWith("--- ")) throw new Error("Not a patch.");
+  const args =
+    mode === "stage"
+      ? ["apply", "--cached", "--recount", "-"]
+      : mode === "unstage"
+        ? ["apply", "--cached", "--recount", "-R", "-"]
+        : ["apply", "--recount", "-R", "-"];
+  const body = patch.endsWith("\n") ? patch : `${patch}\n`;
+  return { output: await gitOk(repoRoot, args, body) };
+}
+
+const COMMIT_PATCH_MAX_BYTES = 120 * 1024;
+
+async function commitContext(repoRoot: string) {
+  const cached = await git(repoRoot, ["diff", "--cached", "--quiet"]);
+  const stagedOnly = cached.code === 1;
+  const diffArgs = stagedOnly ? ["diff", "--cached"] : ["diff", "HEAD"];
+  const [stat, patch, untracked, recent, branch] = await Promise.all([
+    git(repoRoot, [...diffArgs, "--stat", "--no-color"]),
+    git(repoRoot, [...diffArgs, "--no-color", "--no-ext-diff", "-M"]),
+    stagedOnly ? null : git(repoRoot, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    git(repoRoot, ["log", "-n", "10", "--format=%s"]),
+    git(repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+  ]);
+  let text = patch.code === 0 ? patch.stdout : "";
+  const newFiles = untracked === null ? [] : untracked.stdout.split("\0").filter((f) => f !== "" && !f.endsWith("/"));
+  for (const file of newFiles.slice(0, 50)) {
+    if (Buffer.byteLength(text) > COMMIT_PATCH_MAX_BYTES) break;
+    const added = await untrackedPatch(repoRoot, file).catch(() => null);
+    if (added !== null && !added.truncated) text += `diff --git a/${file} b/${file}\nnew file\n${added.patch}`;
+  }
+  const truncated = Buffer.byteLength(text) > COMMIT_PATCH_MAX_BYTES;
+  if (truncated) text = Buffer.from(text).subarray(0, COMMIT_PATCH_MAX_BYTES).toString("utf8");
+  const statText = [stat.code === 0 ? stat.stdout.trim() : "", ...newFiles.map((f) => ` ${f} (new file)`)]
+    .filter(Boolean)
+    .join("\n");
+  return {
+    stagedOnly,
+    stat: statText,
+    patch: text,
+    truncated,
+    recent: recent.code === 0 ? recent.stdout.split("\n").filter(Boolean) : [],
+    branch: branch.code === 0 ? branch.stdout.trim() : null,
+  };
+}
+
+function runClaudeCli(cwd: string, prompt: string): Promise<{ available: boolean; text: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      "claude",
+      ["-p", "--model", "claude-opus-5-5", "--tools", ""],
+      { cwd, env: process.env, maxBuffer: 4 * 1024 * 1024, timeout: 90_000, encoding: "utf8" },
+      (error, stdout, stderr) => {
+        if (error !== null && "code" in error && error.code === "ENOENT") {
+          resolve({ available: false, text: "" });
+          return;
+        }
+        if (error !== null) {
+          reject(new Error(stderr.trim() || error.message));
+          return;
+        }
+        resolve({ available: true, text: stdout.trim() });
+      },
+    );
+    child.stdin?.end(prompt);
+  });
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   experimental_signals: hostSignals,
@@ -827,6 +968,13 @@ export default experimental_defineHostEntry({
     log: ({ root, repo, all, skip, limit }) => log(inside(root, repo), all, skip, limit),
     show: ({ root, repo, sha }) => show(inside(root, repo), sha),
     branches: ({ root, repo }) => branches(inside(root, repo)),
+    commitContext: ({ root, repo }) => commitContext(inside(root, repo)),
+    createPr: ({ root, repo, base }) => createPr(inside(root, repo), base),
+    applyHunk: ({ root, repo, patch, mode }) => {
+      invalidate(root);
+      return applyHunk(inside(root, repo), patch, mode);
+    },
+    claudeCli: ({ root, prompt }) => runClaudeCli(path.resolve(root), prompt),
     compare: ({ root, repo, base }) => compare(inside(root, repo), base),
     compareDiff: ({ root, repo, base, path: rel }) => compareDiff(inside(root, repo), base, rel),
     stage: async ({ root, repo, paths }) => {
