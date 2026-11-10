@@ -4,10 +4,13 @@ import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { DiffTab } from "./ui/DiffTab";
 import { GitView } from "./ui/GitView";
+import { GraphView } from "./ui/GraphView";
 import { NamesView } from "./ui/NamesView";
 import { indexBadges, useRefreshSignal, useTreehouseRpc, useWorkspaceStatus } from "./ui/data";
 
-type Mode = "names" | "git";
+type Mode = "files" | "diff" | "graph";
+
+const MODE_LABELS: Record<Mode, string> = { files: "Files", diff: "Diff", graph: "Graph" };
 
 const modes = new Map<string, Mode>();
 const modeListeners = new Set<(mode: Mode) => void>();
@@ -33,7 +36,7 @@ function TreehouseTab({ environment }: ExperimentalThreadTabProps) {
 function Treehouse({ environmentId }: { environmentId: string }) {
   const rpc = useTreehouseRpc();
   const [mode, setModeState] = useState<Mode>(() => {
-    const initial = pendingMode ?? modes.get(environmentId) ?? "names";
+    const initial = pendingMode ?? modes.get(environmentId) ?? "files";
     pendingMode = null;
     return initial;
   });
@@ -52,6 +55,8 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   const [manual, setManual] = useState(0);
   const [collapse, setCollapse] = useState(0);
   const auto = useRefreshSignal(environmentId);
+  const graphAuto = useRefreshSignal(environmentId, { poll: false });
+  const graphSignal = graphAuto + manual;
   const signal = auto + manual;
   const { workspace, error, reload } = useWorkspaceStatus(rpc, environmentId, signal);
   const badges = useMemo(() => indexBadges(workspace), [workspace]);
@@ -73,7 +78,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
     <div className="flex h-full min-h-0 flex-col [&_[role=button]]:cursor-pointer [&_[role=option]]:cursor-pointer [&_[role=tab]]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_button]:cursor-pointer [&_select]:cursor-pointer">
       <div className="flex items-center gap-1 px-2 pt-2">
         <div role="tablist" className="flex flex-1 rounded-lg bg-secondary p-0.5">
-          {(["names", "git"] as const).map((value) => (
+          {(["files", "diff", "graph"] as const).map((value) => (
             <button
               key={value}
               type="button"
@@ -87,14 +92,14 @@ function Treehouse({ environmentId }: { environmentId: string }) {
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {value === "names" ? "Names" : "Git"}
-              {value === "git" && changeCount > 0 ? (
+              {MODE_LABELS[value]}
+              {value === "diff" && changeCount > 0 ? (
                 <span className="text-xs text-muted-foreground">{changeCount}</span>
               ) : null}
             </button>
           ))}
         </div>
-        {mode === "names" ? (
+        {mode === "files" ? (
           <button
             type="button"
             title="Collapse all"
@@ -116,7 +121,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
           <Icon name="ArrowReloadHorizontal" className="size-4" />
         </button>
       </div>
-      {mode === "names" ? (
+      {mode === "files" ? (
         <>
           <div className="px-2 py-2">
             <div className="flex items-center gap-2 rounded-md border border-input px-2">
@@ -154,6 +159,10 @@ function Treehouse({ environmentId }: { environmentId: string }) {
             />
           </div>
         </>
+      ) : mode === "graph" ? (
+        <div className="mt-2 flex min-h-0 flex-1 flex-col border-t border-border">
+          <GraphView rpc={rpc} environmentId={environmentId} workspace={workspace} signal={graphSignal} />
+        </div>
       ) : (
         <div className="mt-2 flex min-h-0 flex-1 flex-col border-t border-border">
           <GitView
@@ -185,13 +194,13 @@ export default definePluginApp((app) => {
     context: { kind: "thread" },
     availability: "action",
     id: "diff",
-    title: "Git changes",
-    tooltip: "Treehouse: open the Git view",
+    title: "Treehouse diff",
+    tooltip: "Treehouse: open the Diff view",
     icon: "FileDiff",
     layout: "flush",
     component: DiffTab,
     run: ({ experimental_panel }) => {
-      requestMode("git");
+      requestMode("diff");
       experimental_panel.openTab({ tab: TAB_REFERENCE });
     },
   });

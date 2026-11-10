@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { ROW_HEIGHT, VirtualList } from "./VirtualList";
 import { FolderPicker, type FolderOption } from "./FolderPicker";
 import { FileIcon } from "./FileIcon";
-import { DIFF_TAB_REFERENCE, diffTabTitle, type DiffParams } from "./DiffTab";
+import { DIFF_TAB_REFERENCE, diffTabTitle, type FileDiffParams } from "./DiffTab";
 import { badgeClass, badgeOf, errorMessage, type Rpc } from "./data";
 
 type Section = "staged" | "changes";
@@ -338,7 +338,7 @@ export function GitView({
           location: null,
         }),
       select: (value: Selected) => {
-        const params: DiffParams = value;
+        const params: FileDiffParams = { kind: "file", ...value };
         panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: diffTabTitle(params) });
       },
     }),

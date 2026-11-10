@@ -53,6 +53,45 @@ const workspaceStatusOutput = z.object({
 });
 export type WorkspaceStatus = z.infer<typeof workspaceStatusOutput>;
 
+export const MAX_LOG_PAGE = 500;
+const shaSchema = z.string().regex(/^[0-9a-f]{4,40}$/iu);
+
+export const commitSchema = z.object({
+  sha: z.string(),
+  parents: z.array(z.string()),
+  author: z.string(),
+  email: z.string(),
+  time: z.number(),
+  refs: z.string(),
+  subject: z.string(),
+});
+export type Commit = z.infer<typeof commitSchema>;
+
+const logOutput = z.object({ commits: z.array(commitSchema), hasMore: z.boolean() });
+export type LogPage = z.infer<typeof logOutput>;
+
+export const commitFileSchema = z.object({
+  path: z.string(),
+  patch: z.string(),
+  add: z.number().int().nullable(),
+  del: z.number().int().nullable(),
+  truncated: z.boolean(),
+});
+export type CommitFile = z.infer<typeof commitFileSchema>;
+
+const showOutput = z.object({
+  sha: z.string(),
+  parents: z.array(z.string()),
+  author: z.string(),
+  email: z.string(),
+  time: z.number(),
+  subject: z.string(),
+  body: z.string(),
+  files: z.array(commitFileSchema),
+  truncated: z.boolean(),
+});
+export type CommitDetail = z.infer<typeof showOutput>;
+
 const message = z.string().trim().min(1).max(20000);
 const fileLists = { tracked: z.array(z.string().min(1)), untracked: z.array(z.string().min(1)) };
 
@@ -75,6 +114,16 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
       input: z.object({ ...repo, path: relPath.min(1), staged: z.boolean(), untracked: z.boolean() }),
       output: z.object({ patch: z.string(), truncated: z.boolean() }),
     },
+    log: {
+      input: z.object({
+        ...repo,
+        all: z.boolean(),
+        skip: z.number().int().min(0).max(1_000_000),
+        limit: z.number().int().min(1).max(MAX_LOG_PAGE),
+      }),
+      output: logOutput,
+    },
+    show: { input: z.object({ ...repo, sha: shaSchema }), output: showOutput },
     stage: { input: z.object({ ...repo, paths: pathList }), output: ok },
     unstage: { input: z.object({ ...repo, paths: pathList }), output: ok },
     discard: { input: z.object({ ...repo, ...fileLists }), output: ok },

@@ -29,7 +29,8 @@ const gitStatusContract = defineRpcContract({
 const changedPayload = z.object({ environmentId: z.string() });
 const POLL_MS = 5000;
 
-export function useRefreshSignal(environmentId: string): number {
+export function useRefreshSignal(environmentId: string, options: { poll?: boolean } = {}): number {
+  const poll = options.poll ?? true;
   const visible = experimental_useTabVisible();
   const [tick, setTick] = useState(0);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -85,12 +86,12 @@ export function useRefreshSignal(environmentId: string): number {
   }, [request]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !poll) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible" && document.hasFocus()) bump();
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [visible, bump]);
+  }, [visible, poll, bump]);
 
   return tick;
 }

@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import type { CommitDetail, CommitFile } from "../contract";
+import { cn } from "@/lib/utils";
+import { relativeTime } from "./graph";
 import { z } from "zod";
 import {
   experimental_Diff as Diff,
@@ -11,17 +14,32 @@ import { errorMessage, useRefreshSignal, useTreehouseRpc } from "./data";
 
 export const DIFF_TAB_REFERENCE = { id: "diff", context: { kind: "thread" }, availability: "action" } as const;
 
-export const diffParamsSchema = z.object({
+const fileParamsSchema = z.object({
+  kind: z.literal("file").optional(),
   repo: z.string(),
   path: z.string().min(1),
   staged: z.boolean(),
   untracked: z.boolean(),
 });
-export type DiffParams = z.infer<typeof diffParamsSchema>;
+const commitParamsSchema = z.object({
+  kind: z.literal("commit"),
+  repo: z.string(),
+  sha: z.string().regex(/^[0-9a-f]{4,40}$/iu),
+  subject: z.string(),
+});
+export const diffParamsSchema = z.union([commitParamsSchema, fileParamsSchema]);
+export type FileDiffParams = z.infer<typeof fileParamsSchema>;
+export type CommitParams = z.infer<typeof commitParamsSchema>;
+export type DiffParams = FileDiffParams | CommitParams;
 
-export function diffTabTitle(params: DiffParams): string {
+export function diffTabTitle(params: FileDiffParams): string {
   const name = params.path.slice(params.path.lastIndexOf("/") + 1);
   return params.staged ? `${name} (staged)` : name;
+}
+
+export function commitTabTitle(params: CommitParams): string {
+  const subject = params.subject.length > 32 ? `${params.subject.slice(0, 31)}…` : params.subject;
+  return `${params.sha.slice(0, 7)} ${subject}`;
 }
 
 export function DiffTab({ environment, params }: ExperimentalThreadActionTabProps) {
@@ -36,10 +54,14 @@ export function DiffTab({ environment, params }: ExperimentalThreadActionTabProp
       </p>
     );
   }
-  return <DiffView key={environment.id} environmentId={environment.id} params={parsed.data} />;
+  const value = parsed.data;
+  if (value.kind === "commit") {
+    return <CommitView key={environment.id} environmentId={environment.id} params={value} />;
+  }
+  return <DiffView key={environment.id} environmentId={environment.id} params={value} />;
 }
 
-function DiffView({ environmentId, params }: { environmentId: string; params: DiffParams }) {
+function DiffView({ environmentId, params }: { environmentId: string; params: FileDiffParams }) {
   const rpc = useTreehouseRpc();
   const navigate = useBbNavigate();
   const signal = useRefreshSignal(environmentId);
@@ -107,5 +129,133 @@ function DiffView({ environmentId, params }: { environmentId: string; params: Di
         )}
       </div>
     </div>
+  );
+}
+
+const EXPANDED_BY_DEFAULT = 8;
+
+function CommitView({ environmentId, params }: { environmentId: string; params: CommitParams }) {
+  const rpc = useTreehouseRpc();
+  const [detail, setDetail] = useState<CommitDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string> | null>(null);
+  const { repo, sha } = params;
+
+  useEffect(() => {
+    let cancelled = false;
+    rpc.call("show", { environmentId, repo, sha }).then(
+      (next) => {
+        if (cancelled) return;
+        setDetail(next);
+        setCollapsed(new Set(next.files.slice(EXPANDED_BY_DEFAULT).map((f) => f.path)));
+      },
+      (cause: unknown) => {
+        if (!cancelled) setError(errorMessage(cause));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [rpc, environmentId, repo, sha]);
+
+  if (error !== null) return <p className="px-4 py-3 text-sm text-destructive">{error}</p>;
+  if (detail === null || collapsed === null) {
+    return <p className="px-4 py-3 text-sm text-muted-foreground">Loading commit…</p>;
+  }
+  let add = 0;
+  let del = 0;
+  for (const f of detail.files) {
+    add += f.add ?? 0;
+    del += f.del ?? 0;
+  }
+  const toggle = (path: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+
+  return (
+    <div className="h-full min-h-0 overflow-y-auto">
+      <div className="space-y-2 border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold leading-snug">{detail.subject}</h2>
+        {detail.body === "" ? null : (
+          <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">{detail.body}</p>
+        )}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">{detail.author}</span>
+          <span aria-hidden>·</span>
+          <span title={new Date(detail.time * 1000).toLocaleString()}>{relativeTime(detail.time)}</span>
+          <span aria-hidden>·</span>
+          <button
+            type="button"
+            title="Copy full hash"
+            onClick={() => void navigator.clipboard?.writeText(detail.sha)}
+            className="flex items-center gap-1 rounded px-1 font-mono hover:bg-state-hover hover:text-foreground"
+          >
+            {detail.sha.slice(0, 10)}
+            <Icon name="Copy" className="size-3" />
+          </button>
+          {detail.parents.length > 1 ? (
+            <span className="rounded bg-secondary px-1.5">merge · diff against first parent</span>
+          ) : null}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {detail.files.length} file{detail.files.length === 1 ? "" : "s"} changed{" "}
+          <span className="font-mono text-diff-added">+{add}</span>{" "}
+          <span className="font-mono text-diff-removed">-{del}</span>
+          {detail.truncated ? " · list truncated" : ""}
+        </div>
+      </div>
+      {detail.files.map((file) => (
+        <CommitFileSection
+          key={file.path}
+          file={file}
+          open={!collapsed.has(file.path)}
+          onToggle={() => toggle(file.path)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function CommitFileSection({ file, open, onToggle }: { file: CommitFile; open: boolean; onToggle: () => void }) {
+  const slash = file.path.lastIndexOf("/");
+  return (
+    <section className="border-b border-border">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={cn(
+          "sticky top-0 z-10 flex w-full items-center gap-2 bg-background px-3 py-1.5 text-left text-sm hover:bg-state-hover",
+          open && "border-b border-border",
+        )}
+      >
+        <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0 text-muted-foreground" />
+        <FileIcon name={file.path.slice(slash + 1)} />
+        <span className="shrink-0 font-medium">{file.path.slice(slash + 1)}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+          {slash === -1 ? "" : file.path.slice(0, slash)}
+        </span>
+        <span className="shrink-0 font-mono text-xs">
+          {file.add === null ? <span className="text-muted-foreground">binary</span> : null}
+          {file.add !== null && file.add > 0 ? <span className="text-diff-added">+{file.add}</span> : null}
+          {file.del !== null && file.del > 0 ? <span className="text-diff-removed"> -{file.del}</span> : null}
+        </span>
+      </button>
+      {open ? (
+        file.truncated ? (
+          <p className="px-4 py-3 text-xs text-muted-foreground">This diff is too large to show.</p>
+        ) : /^Binary files|^GIT binary patch/mu.test(file.patch) || !file.patch.includes("@@") ? (
+          <p className="px-4 py-3 text-xs text-muted-foreground">
+            No textual diff (binary, mode change or rename only).
+          </p>
+        ) : (
+          <Diff patch={file.patch} path={file.path} />
+        )
+      ) : null}
+    </section>
   );
 }

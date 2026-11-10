@@ -9,6 +9,8 @@ import {
   MAX_STATUS_FILES,
   hostContract,
   type Change,
+  type Commit,
+  type CommitFile,
   type DirEntry,
   type RepoStatus,
   type Status,
@@ -428,6 +430,99 @@ async function workspaceStatus(root: string, rescan: boolean) {
   };
 }
 
+const FIELD = "\x1f";
+const RECORD = "\x1e";
+const SHOW_MAX_FILES = 300;
+const SHOW_FILE_MAX_BYTES = 512 * 1024;
+const SHOW_TOTAL_MAX_BYTES = 6 * 1024 * 1024;
+
+async function log(repoRoot: string, all: boolean, skip: number, limit: number) {
+  const args = [
+    "log",
+    "--topo-order",
+    `--skip=${skip}`,
+    `--max-count=${limit + 1}`,
+    `--format=%H${FIELD}%P${FIELD}%an${FIELD}%ae${FIELD}%at${FIELD}%D${FIELD}%s${RECORD}`,
+  ];
+  if (all) args.push("--branches", "--remotes", "--tags", "HEAD");
+  else args.push("HEAD");
+  const result = await git(repoRoot, args);
+  if (result.code !== 0) return { commits: [], hasMore: false };
+  const commits: Commit[] = [];
+  for (const record of result.stdout.split(RECORD)) {
+    const line = record.replace(/^\n/u, "");
+    if (line === "") continue;
+    const [sha, parents, author, email, time, refs, subject] = line.split(FIELD);
+    if (sha === undefined || sha === "") continue;
+    commits.push({
+      sha,
+      parents: parents === undefined || parents === "" ? [] : parents.split(" "),
+      author: author ?? "",
+      email: email ?? "",
+      time: Number(time ?? 0),
+      refs: refs ?? "",
+      subject: subject ?? "",
+    });
+  }
+  return { commits: commits.slice(0, limit), hasMore: commits.length > limit };
+}
+
+async function show(repoRoot: string, sha: string) {
+  const header = await gitOk(repoRoot, [
+    "show",
+    "-s",
+    `--format=%H${FIELD}%P${FIELD}%an${FIELD}%ae${FIELD}%at${FIELD}%s${FIELD}%b`,
+    sha,
+  ]);
+  const [full, parents, author, email, time, subject, ...body] = header.split(FIELD);
+  const firstParent = (parents ?? "").split(" ").filter(Boolean)[0];
+  const range = firstParent === undefined ? ["--root", sha] : [firstParent, sha];
+  const [numstat, patch] = await Promise.all([
+    git(repoRoot, ["diff-tree", "-r", "-M", "--numstat", "-z", "--no-commit-id", ...range]),
+    git(repoRoot, ["diff-tree", "-r", "-M", "-p", "--no-color", "--no-ext-diff", "--no-commit-id", ...range]),
+  ]);
+  const stats = new Map<string, { add: number | null; del: number | null }>();
+  if (numstat.code === 0) parseNumstat(numstat.stdout, stats);
+  const files: CommitFile[] = [];
+  let total = 0;
+  let truncated = false;
+  const chunks = patch.code === 0 ? patch.stdout.split(/^(?=diff --git )/mu) : [];
+  for (const chunk of chunks) {
+    if (!chunk.startsWith("diff --git ")) continue;
+    if (files.length >= SHOW_MAX_FILES) {
+      truncated = true;
+      break;
+    }
+    const plus = /^\+\+\+ b\/(.+)$/mu.exec(chunk)?.[1];
+    const renamed = /^rename to (.+)$/mu.exec(chunk)?.[1];
+    const minus = /^--- a\/(.+)$/mu.exec(chunk)?.[1];
+    const header = /^diff --git a\/(.+?) b\/(.+)$/mu.exec(chunk);
+    const filePath = plus ?? renamed ?? minus ?? header?.[2] ?? "?";
+    const size = Buffer.byteLength(chunk);
+    const tooBig = size > SHOW_FILE_MAX_BYTES || total + size > SHOW_TOTAL_MAX_BYTES;
+    if (!tooBig) total += size;
+    const stat = stats.get(filePath);
+    files.push({
+      path: filePath,
+      patch: tooBig ? "" : chunk,
+      add: stat?.add ?? null,
+      del: stat?.del ?? null,
+      truncated: tooBig,
+    });
+  }
+  return {
+    sha: full ?? sha,
+    parents: (parents ?? "").split(" ").filter(Boolean),
+    author: author ?? "",
+    email: email ?? "",
+    time: Number(time ?? 0),
+    subject: subject ?? "",
+    body: body.join(FIELD).trim(),
+    files,
+    truncated,
+  };
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   dispose: () => {
@@ -440,6 +535,8 @@ export default experimental_defineHostEntry({
     workspaceStatus: ({ root, rescan }) => workspaceStatus(root, rescan),
     search: ({ root, query }) => search(root, query),
     diff: ({ root, repo, path: rel, staged, untracked }) => diff(inside(root, repo), rel, staged, untracked),
+    log: ({ root, repo, all, skip, limit }) => log(inside(root, repo), all, skip, limit),
+    show: ({ root, repo, sha }) => show(inside(root, repo), sha),
     stage: async ({ root, repo, paths }) => {
       const r = inside(root, repo);
       invalidate(root);

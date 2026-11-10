@@ -76,6 +76,14 @@ export default async function plugin(bb: BbPluginApi) {
       const { hostId, root } = await resolve(environmentId);
       return host.call("diff", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
+    log: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("log", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
+    show: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("show", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
     stage: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
       host.call("stage", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),

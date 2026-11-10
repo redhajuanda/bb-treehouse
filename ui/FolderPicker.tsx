@@ -9,6 +9,13 @@ export interface FolderOption {
   repos: string[];
   changes: number;
   all: boolean;
+  subtitle?: string;
+}
+
+function subtitleOf(option: FolderOption): string {
+  if (option.subtitle !== undefined) return option.subtitle;
+  const count = `${option.repos.length} repo${option.repos.length === 1 ? "" : "s"}`;
+  return option.path !== "" && option.path !== option.title ? `${count} · ${option.path}` : count;
 }
 
 function matches(option: FolderOption, needle: string): string | null {
@@ -22,10 +29,14 @@ export function FolderPicker({
   options,
   value,
   onChange,
+  placeholder = "Search folders and repositories",
+  noun = "folders",
 }: {
   options: readonly FolderOption[];
   value: string;
   onChange: (key: string) => void;
+  placeholder?: string;
+  noun?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -112,10 +123,7 @@ export function FolderPicker({
         </span>
         <span className="flex min-w-0 flex-1 flex-col leading-tight">
           <span className="truncate text-sm font-medium">{current.title}</span>
-          <span className="truncate text-xs text-muted-foreground">
-            {current.repos.length} repo{current.repos.length === 1 ? "" : "s"}
-            {current.path !== "" && current.path !== current.title ? ` · ${current.path}` : ""}
-          </span>
+          <span className="truncate text-xs text-muted-foreground">{subtitleOf(current)}</span>
         </span>
         <ChangeBadge count={current.changes} />
         <Icon
@@ -133,8 +141,8 @@ export function FolderPicker({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Search folders and repositories"
-              aria-label="Search folders and repositories"
+              placeholder={placeholder}
+              aria-label={placeholder}
               className="h-9 min-w-0 flex-1 bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
             />
             {query === "" ? null : (
@@ -153,7 +161,9 @@ export function FolderPicker({
           </div>
           <div ref={listRef} role="listbox" className="max-h-72 overflow-y-auto p-1">
             {filtered.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">No folders match “{query}”.</p>
+              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                No {noun} match “{query}”.
+              </p>
             ) : (
               filtered.map(({ option, via }, index) => {
                 const selected = option.key === value;
@@ -182,11 +192,9 @@ export function FolderPicker({
                     <span className="flex min-w-0 flex-1 flex-col leading-tight">
                       <span className="truncate text-sm font-medium">{option.title}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {via !== null && via !== ""
+                        {via !== null && via !== "" && option.subtitle === undefined
                           ? `contains ${via}`
-                          : `${option.repos.length} repo${option.repos.length === 1 ? "" : "s"}${
-                              option.path !== "" && option.path !== option.title ? ` · ${option.path}` : ""
-                            }`}
+                          : subtitleOf(option)}
                       </span>
                     </span>
                     <ChangeBadge count={option.changes} />
