@@ -126,7 +126,18 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   );
 }
 
+const TAB_REFERENCE = { id: "treehouse", context: { kind: "thread" }, availability: "fixed" } as const;
+
 export default definePluginApp((app) => {
+  app.commands.register({
+    id: "toggle-files",
+    title: "Treehouse: toggle files",
+    defaultShortcut: { key: "e", mod: true, shift: true },
+    isAvailable: (context) => context.threadId !== null,
+    run(context) {
+      context.experimental_panel.toggleTab({ tab: TAB_REFERENCE });
+    },
+  });
   app.slots.experimental_tab({
     context: { kind: "thread" },
     availability: "fixed",
