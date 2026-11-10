@@ -1,15 +1,82 @@
-# Treehouse
+<div align="center">
+
+# 🌳 Treehouse
+
+**See everything your agents changed, across every worktree and repository, without leaving the thread.**
+
+A file tree, a multi-repo Git panel and a commit graph for [bb](https://getbb.app), living right beside your agent's chat.
+
+[![Release](https://img.shields.io/github/v/release/redhajuanda/bb-treehouse?label=release&color=3b82f6)](https://github.com/redhajuanda/bb-treehouse/releases)
+[![bb plugin](https://img.shields.io/badge/bb-plugin-111827)](https://getbb.app)
 
 ![Treehouse: file tree, per-repository diff with ✨ commit messages, branch compare and commit graph](docs/demo.gif)
 
-A [bb](https://getbb.app) plugin that adds a **Files** tab to every thread's side panel, with three views:
+</div>
 
-- **Files**: a file tree with a searchable folder picker (the workspace, every folder that holds git repositories such as `.worktrees/feature-x`, and every repository). Picking one roots the tree and **Find files** there. Git badges (`M`, `U`, `A`, `D`) and coloured names come from whichever repository each file belongs to. Ignored entries are judged by the repository that contains them: a folder that is its own repository is never shown as ignored, and inside an ignored folder only the folder itself carries the mark. The eye button hides ignored entries entirely. Click a file to open it in bb's preview.
-- **Diff**: a searchable folder picker listing **All repositories** and every folder that directly holds git repositories (for example `.worktrees/feature-x`, `.claude/worktrees/fix-y`, `repositories`). Repositories are found anywhere in the workspace up to 4 levels deep, skipping `node_modules`, build output and `.git`. Each repository is a collapsible section showing its branch, plus pull/push buttons only when it is behind or ahead (or **Publish** when the branch has no upstream). Inside are Staged and Changes lists with per-file stage, unstage, discard (click twice to confirm) and open; click a file to open its diff in its own panel tab (it refreshes as the file changes). Each expanded repository has its own message field (Ctrl/⌘+Enter commits; the ✨ button writes the message with Claude from the staged diff, or from all changes when nothing is staged) and a **Commit** button that commits the staged files, or stages and commits everything when nothing is staged; its ▾ menu adds **Commit & Push** and **Amend Last Commit**. Pull is fast-forward only. Each repository also has a **Compare with** section: pick a base branch (nothing is compared until you pick one; the picker searches local and remote branches and lists the repository's main branch first) to see how far the current branch is ahead/behind it and every file it changed since they diverged (`base...HEAD`, committed work only), each opening its diff in a tab. When the branch is ahead, **Create PR** pushes it (setting the upstream if needed) and opens the new pull request / merge request page for GitHub, GitLab (including self-hosted) or Bitbucket. In a file's diff tab every hunk has **Stage hunk** and **Discard** (working tree) or **Unstage hunk** (staged).
+```sh
+bb plugin install git:https://github.com/redhajuanda/bb-treehouse@^0.2.0 --yes
+```
 
-- **Graph**: a commit graph for one repository at a time (defaults to the workspace's own repository; the picker lists every repository found). Coloured lanes show branches and merges; each commit shows the author's initials, message, branch/tag badges (the checked-out branch in blue), short hash and relative date. Switch between **All branches** and the current branch, filter loaded commits by message, author, hash or branch, and load 300 more at a time. Click a commit to open it in its own tab with each changed file's diff (merges are shown against their first parent).
+Open any thread's side panel, pick **Files** (or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>), and you're in.
 
-## File icons
+## Why Treehouse?
+
+Agents don't work in one tidy repo. They spread out across `.worktrees/`, nested service repos and feature branches, and you end up jumping to a terminal or another editor just to see what happened. Treehouse puts it all one click away, in the same panel as the conversation:
+
+- 🗂️ **Every repository, one panel.** Treehouse finds every git repo in the workspace, worktrees and nested repos included, and gives each its own section.
+- ⚡ **Live, not polled.** Changes appear the moment an agent saves a file or you run `git` in a terminal, using bb's native file watcher. Idle workspaces cost nothing.
+- ✨ **Commit in seconds.** Claude writes the commit message in your repo's own style. Review it, hit <kbd>⌘</kbd>+<kbd>Enter</kbd>, done.
+- 🔀 **From branch to PR without leaving bb.** Compare any branch against `main`, then open a pull request on GitHub, GitLab or Bitbucket in one click.
+- 🧭 **Feels native.** bb's own theme, keyboard navigation, VS Code-style file icons, and views that remember exactly where you were.
+
+## Three views, one tab
+
+### 📁 Files: the tree you wish your agent panel had
+
+- Icons for 200+ file types (Go, TypeScript, Docker, Terraform, …) and 170+ well-known folders, from Material Icon Theme.
+- Git status right in the tree: **M**odified, **U**ntracked, **A**dded and **D**eleted, coloured all the way up the folder path.
+- Jump between the workspace, any worktree or any nested repo from a searchable folder picker.
+- Fuzzy **Find files** that searches inside nested repos too.
+- Ignored files are judged by the repo that actually owns them, so your worktrees don't show up greyed out. One click hides ignored files entirely.
+
+### ± Diff: a Git client built for many repos
+
+- Each repository gets its own **commit box**: ✨ AI message, **Commit**, **Commit & Push** and **Amend Last Commit**.
+- **Staged** and **Changes** lists with one-click stage, unstage and discard, per file or per **hunk**.
+- Diffs open in their own panel tab and update live as files change.
+- **Compare with** any local or remote branch: ahead/behind counts plus every file changed since the branches split, just like a PR view.
+- **Create PR** pushes the branch and opens the pull request or merge request page. Works with GitHub, GitLab (self-hosted too) and Bitbucket, with no CLI login needed.
+- Pull, push, and **Publish** for branches that don't have an upstream yet.
+
+### ⑂ Graph: your history, at a glance
+
+- A Bitbucket-style commit graph with coloured branch lanes and merges.
+- Branch and tag badges, author initials, short hashes and relative dates.
+- **All branches** or just the current one. Filter by message, author, hash or branch.
+- Click any commit to see its full diff, file by file.
+
+## Fast by design
+
+Treehouse is built to stay smooth on big monorepos:
+
+- Folders load only when you open them, and only the rows on screen are drawn.
+- On an 8,700-file repo, opening a folder takes about 15 ms and a full status read about 16 ms. Loading 300 commits across every branch takes about 160 ms.
+- Switching away to a file and back is instant: views keep their data and scroll position.
+
+## Works with your setup
+
+| | |
+|---|---|
+| **Workspaces** | Plain repos, `git worktree` folders, nested repos, monorepos |
+| **Pull requests** | GitHub, GitLab (cloud and self-hosted), Bitbucket |
+| **✨ Commit messages** | An Anthropic API key, an `ant auth login` profile, or the `claude` CLI, whichever you already have |
+| **CLI** | `bb treehouse status` and `bb treehouse ls` for scripts and agents |
+
+---
+
+## Details
+
+### File icons
 
 Files and folders use icons from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT), matched by file name (`go.mod`, `Dockerfile`, `package.json`, …), then by extension, including compound ones like `.d.ts` and `.test.ts`. Well-known folders (`src`, `docs`, `.github`, `node_modules`, …) get their own coloured folder icons. To keep the panel fast only a curated set of about 350 icons is bundled; anything else gets the theme's default file or folder icon. To change the set, edit the lists in `scripts/generate-file-icons.mjs` and run:
 
@@ -18,7 +85,7 @@ npm install
 node scripts/generate-file-icons.mjs
 ```
 
-## Performance
+### Performance
 
 - Folders load only when you expand them (one `readdir` plus one `git check-ignore` for that folder).
 - Only the rows on screen are rendered, so huge folders and long change lists scroll smoothly.
@@ -26,23 +93,7 @@ node scripts/generate-file-icons.mjs
 - Changes are pushed, not polled. While Treehouse is open, bb's native file watcher (on the environment's machine) watches the workspace, skipping `node_modules`, build output and git object stores, plus each repository's git directory (index, HEAD and refs, including linked worktrees' git dirs). Any change sends one debounced signal and the open views refresh. Treehouse's own git reads use `GIT_OPTIONAL_LOCKS=0`, so they never trigger a refresh themselves. The watch is a lease renewed every minute and dropped three minutes after the last Treehouse view closes. If the watcher can't start, Treehouse falls back to a 5-second check while the tab is visible.
 - Search uses a 5-second cached `git ls-files` (cached, untracked, not ignored).
 
-## Install
-
-```sh
-bb plugin install git:https://github.com/redhajuanda/bb-treehouse --yes
-```
-
-Or from a local checkout:
-
-```sh
-npm install
-bb plugin build .
-bb plugin install . --yes
-```
-
-Then open the side panel in any thread and pick **Files**.
-
-## ✨ Commit messages
+### ✨ Commit messages
 
 Treehouse asks Claude Opus 5.5 (low effort) for a one-line summary in your repository's commit style, plus a short body when the change needs one. It uses, in order:
 
@@ -52,7 +103,7 @@ Treehouse asks Claude Opus 5.5 (low effort) for a one-line summary in your repos
 
 Requests opt into the API's server-side refusal fallback. Diffs over 120 KB are cut off; the diffstat still lists every file.
 
-## CLI
+### CLI
 
 ```sh
 bb treehouse status <environment-id> [folder] [--json]  # every repository (or those under folder): branch, ahead/behind, changed files
@@ -61,14 +112,14 @@ bb treehouse ls <environment-id> [dir] [--json] # one directory, marking ignored
 
 Find an environment id with `bb status` inside a thread.
 
-## Layout
+### Code layout
 
 - `host.ts`: runs on the environment's machine and does all filesystem and `git` work.
 - `server.ts`: maps a thread's environment to its host and path, exposes RPC and the CLI, and asks bb's Git plugin to refresh after each change.
 - `app.tsx`, `ui/`: the panel tab.
 - `contract.ts`: shared RPC schemas.
 
-## Development
+### Development
 
 ```sh
 npm install
