@@ -43,7 +43,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col [&_[role=button]]:cursor-pointer [&_[role=option]]:cursor-pointer [&_[role=tab]]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_button]:cursor-pointer [&_select]:cursor-pointer">
       <div className="flex items-center gap-1 px-2 pt-2">
         <div role="tablist" className="flex flex-1 rounded-lg bg-secondary p-0.5">
           {(["names", "git"] as const).map((value) => (
