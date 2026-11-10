@@ -114,6 +114,10 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
       input: z.object({ ...repo, path: relPath.min(1), staged: z.boolean(), untracked: z.boolean() }),
       output: z.object({ patch: z.string(), truncated: z.boolean() }),
     },
+    watch: {
+      input: z.object(base),
+      output: z.object({ watching: z.boolean() }),
+    },
     log: {
       input: z.object({
         ...repo,
@@ -137,3 +141,10 @@ export const hostContract = contractFor({ root });
 export const rpcContract = contractFor({ environmentId: z.string().min(1) });
 
 export const CHANGED_CHANNEL = "changed";
+
+export const hostSignals = {
+  changed: { payload: z.object({ root: z.string() }) },
+} as const;
+
+export const WATCH_LEASE_MS = 3 * 60_000;
+export const WATCH_RENEW_MS = 60_000;

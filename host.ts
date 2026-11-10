@@ -1,13 +1,15 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
+import { experimental_defineHostEntry, type ExperimentalHostRpcContext } from "@get-bb/plugin-sdk/host";
 import {
   MAX_DIR_ENTRIES,
   MAX_REPOS,
   MAX_SEARCH_RESULTS,
   MAX_STATUS_FILES,
+  WATCH_LEASE_MS,
   hostContract,
+  hostSignals,
   type Change,
   type Commit,
   type CommitFile,
@@ -566,19 +568,172 @@ async function show(repoRoot: string, sha: string) {
   };
 }
 
+const WATCH_IGNORES = [
+  "**/node_modules",
+  "**/.git/objects",
+  "**/.git/logs",
+  "**/.git/lfs",
+  "**/.git/hooks",
+  "**/.git/modules/*/objects",
+  "**/dist",
+  "**/build",
+  "**/.next",
+  "**/.nuxt",
+  "**/.turbo",
+  "**/.cache",
+  "**/.venv",
+  "**/venv",
+  "**/__pycache__",
+  "**/target",
+  "**/coverage",
+  "**/.pnpm-store",
+  "**/.gradle",
+];
+
+function isNoise(changed: string): boolean {
+  return (
+    changed.endsWith(".lock") ||
+    changed.includes(`${path.sep}.git${path.sep}objects${path.sep}`) ||
+    changed.includes(`${path.sep}.git${path.sep}logs${path.sep}`) ||
+    changed.endsWith(`${path.sep}.git${path.sep}FETCH_HEAD`)
+  );
+}
+
+interface WatchState {
+  expires: number;
+  watching: boolean;
+  dispose: (() => Promise<void>) | null;
+  gitDirs: Map<string, () => Promise<void>>;
+}
+
+const GIT_DIR_IGNORES = ["objects", "logs", "lfs", "hooks", "modules/*/objects", "worktrees/*/logs"];
+
+async function gitDirsFor(root: string): Promise<string[]> {
+  const found = await discover(root, false).catch(() => ({ repos: [] as string[], truncated: false }));
+  const dirs = new Set<string>();
+  await Promise.all(
+    found.repos.map(async (repo) => {
+      const result = await git(inside(root, repo), ["rev-parse", "--absolute-git-dir", "--git-common-dir"]).catch(
+        () => null,
+      );
+      if (result === null || result.code !== 0) return;
+      const [gitDir, common] = result.stdout.trim().split("\n");
+      if (gitDir !== undefined && gitDir !== "") dirs.add(path.resolve(gitDir));
+      if (common !== undefined && common !== "") dirs.add(path.resolve(inside(root, repo), common));
+    }),
+  );
+  return [...dirs];
+}
+
+async function syncGitDirWatches(key: string, state: WatchState, context: HostContext, emit: () => void) {
+  const wanted = new Set(await gitDirsFor(key));
+  for (const [dir, dispose] of state.gitDirs) {
+    if (wanted.has(dir)) continue;
+    state.gitDirs.delete(dir);
+    void dispose().catch(() => undefined);
+  }
+  await Promise.all(
+    [...wanted].map(async (dir) => {
+      if (state.gitDirs.has(dir) || !watches.has(key)) return;
+      try {
+        const subscription = await context.experimental_watch(
+          { rootPath: dir, ignoredPaths: GIT_DIR_IGNORES, debounceMs: 150, maxWaitMs: 1000 },
+          (event) => {
+            if (event.kind === "watch-error") return;
+            if (event.kind === "changed" && event.changes.every((change) => isNoise(change.path))) return;
+            emit();
+          },
+        );
+        state.gitDirs.set(dir, () => subscription.dispose());
+      } catch {
+        return;
+      }
+    }),
+  );
+}
+
+const watches = new Map<string, WatchState>();
+let sweeper: ReturnType<typeof setInterval> | null = null;
+
+function sweep() {
+  const now = Date.now();
+  for (const [key, state] of watches) {
+    if (state.expires > now) continue;
+    watches.delete(key);
+    void state.dispose?.().catch(() => undefined);
+    for (const dispose of state.gitDirs.values()) void dispose().catch(() => undefined);
+  }
+  if (watches.size === 0 && sweeper !== null) {
+    clearInterval(sweeper);
+    sweeper = null;
+  }
+}
+
+type HostContext = ExperimentalHostRpcContext<typeof hostSignals>;
+
+async function watch(root: string, context: HostContext): Promise<{ watching: boolean }> {
+  const key = path.resolve(root);
+  const expires = Date.now() + WATCH_LEASE_MS;
+  const existing = watches.get(key);
+  const emit = () => void context.experimental_emitSignal("changed", { root: key }).catch(() => undefined);
+  if (existing !== undefined) {
+    existing.expires = expires;
+    void syncGitDirWatches(key, existing, context, emit);
+    return { watching: existing.watching };
+  }
+  const state: WatchState = { expires, watching: false, dispose: null, gitDirs: new Map() };
+  watches.set(key, state);
+  if (sweeper === null) {
+    sweeper = setInterval(sweep, 30_000);
+    sweeper.unref?.();
+  }
+  try {
+    const subscription = await context.experimental_watch(
+      { rootPath: key, ignoredPaths: WATCH_IGNORES, debounceMs: 150, maxWaitMs: 1000 },
+      (event) => {
+        if (event.kind === "watch-error") return;
+        if (event.kind === "changed" && event.changes.every((change) => isNoise(change.path))) return;
+        if (event.kind === "changed" && event.changes.some((change) => change.path.endsWith(`${path.sep}.git`))) {
+          discoveryCache.delete(key);
+          void syncGitDirWatches(key, state, context, emit);
+        }
+        emit();
+      },
+    );
+    state.watching = true;
+    state.dispose = () => subscription.dispose();
+    await syncGitDirWatches(key, state, context, emit);
+  } catch {
+    state.watching = false;
+  }
+  return { watching: state.watching };
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
+  experimental_signals: hostSignals,
   dispose: () => {
     repoCache.clear();
     lsFilesCache.clear();
     discoveryCache.clear();
     toplevelCache.clear();
+    if (sweeper !== null) clearInterval(sweeper);
+    sweeper = null;
+    const active = [...watches.values()];
+    watches.clear();
+    return Promise.all(
+      active.flatMap((state) => [
+        state.dispose?.().catch(() => undefined),
+        ...[...state.gitDirs.values()].map((dispose) => dispose().catch(() => undefined)),
+      ]),
+    ).then(() => undefined);
   },
   handlers: {
     listDir: ({ root, rel }) => listDir(root, rel),
     workspaceStatus: ({ root, rescan }) => workspaceStatus(root, rescan),
     search: ({ root, base, query }) => search(root, base, query),
     diff: ({ root, repo, path: rel, staged, untracked }) => diff(inside(root, repo), rel, staged, untracked),
+    watch: ({ root }, context) => watch(root, context),
     log: ({ root, repo, all, skip, limit }) => log(inside(root, repo), all, skip, limit),
     show: ({ root, repo, sha }) => show(inside(root, repo), sha),
     stage: async ({ root, repo, paths }) => {

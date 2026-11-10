@@ -10,7 +10,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { FileIcon } from "./FileIcon";
-import { errorMessage, useRefreshSignal, useTreehouseRpc } from "./data";
+import { errorMessage, useRefreshSignal, useTreehouseRpc, useWatchLease } from "./data";
 
 export const DIFF_TAB_REFERENCE = { id: "diff", context: { kind: "thread" }, availability: "action" } as const;
 
@@ -64,7 +64,8 @@ export function DiffTab({ environment, params }: ExperimentalThreadActionTabProp
 function DiffView({ environmentId, params }: { environmentId: string; params: FileDiffParams }) {
   const rpc = useTreehouseRpc();
   const navigate = useBbNavigate();
-  const signal = useRefreshSignal(environmentId);
+  const watching = useWatchLease(rpc, environmentId);
+  const signal = useRefreshSignal(environmentId, { poll: watching === false });
   const [result, setResult] = useState<{ patch: string; truncated: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { repo, path, staged, untracked } = params;

@@ -7,7 +7,7 @@ import { GitView } from "./ui/GitView";
 import { GraphView } from "./ui/GraphView";
 import { FolderPicker, type FolderOption } from "./ui/FolderPicker";
 import { NamesView } from "./ui/NamesView";
-import { indexBadges, useRefreshSignal, useTreehouseRpc, useWorkspaceStatus } from "./ui/data";
+import { indexBadges, useRefreshSignal, useTreehouseRpc, useWatchLease, useWorkspaceStatus } from "./ui/data";
 
 type Mode = "files" | "diff" | "graph";
 
@@ -68,7 +68,8 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   const [query, setQueryState] = useState(() => queries.get(environmentId) ?? "");
   const [manual, setManual] = useState(0);
   const [collapse, setCollapse] = useState(0);
-  const auto = useRefreshSignal(environmentId);
+  const watching = useWatchLease(rpc, environmentId);
+  const auto = useRefreshSignal(environmentId, { poll: watching === false });
   const graphAuto = useRefreshSignal(environmentId, { poll: false });
   const graphSignal = graphAuto + manual;
   const signal = auto + manual;

@@ -21,7 +21,7 @@ node scripts/generate-file-icons.mjs
 - Folders load only when you expand them (one `readdir` plus one `git check-ignore` for that folder).
 - Only the rows on screen are rendered, so huge folders and long change lists scroll smoothly.
 - One round trip per refresh returns every repository's status; the host runs `git status --porcelain=v2` for up to 6 repositories in parallel. Repository discovery is cached for 30 seconds (the refresh button rescans).
-- Refreshes come from bb's git file watcher, Treehouse's actions, window focus, the refresh button, and a 5-second check while the tab is showing and the window is focused. Unchanged results don't re-render, and nothing runs while the tab is hidden.
+- Changes are pushed, not polled. While Treehouse is open, bb's native file watcher (on the environment's machine) watches the workspace, skipping `node_modules`, build output and git object stores, plus each repository's git directory (index, HEAD and refs, including linked worktrees' git dirs). Any change sends one debounced signal and the open views refresh. Treehouse's own git reads use `GIT_OPTIONAL_LOCKS=0`, so they never trigger a refresh themselves. The watch is a lease renewed every minute and dropped three minutes after the last Treehouse view closes. If the watcher can't start, Treehouse falls back to a 5-second check while the tab is visible.
 - Search uses a 5-second cached `git ls-files` (cached, untracked, not ignored).
 
 ## Install

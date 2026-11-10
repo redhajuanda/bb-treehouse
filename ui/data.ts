@@ -7,7 +7,7 @@ import {
   useRealtime,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import { CHANGED_CHANNEL, type Change, type WorkspaceStatus, type rpcContract } from "../contract";
+import { CHANGED_CHANNEL, WATCH_RENEW_MS, type Change, type WorkspaceStatus, type rpcContract } from "../contract";
 
 export type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
@@ -28,6 +28,30 @@ const gitStatusContract = defineRpcContract({
 
 const changedPayload = z.object({ environmentId: z.string() });
 const POLL_MS = 5000;
+
+export function useWatchLease(rpc: Rpc, environmentId: string): boolean | null {
+  const [watching, setWatching] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const renew = () => {
+      rpc.call("watch", { environmentId }).then(
+        (result) => {
+          if (!cancelled) setWatching(result.watching);
+        },
+        () => {
+          if (!cancelled) setWatching(false);
+        },
+      );
+    };
+    renew();
+    const timer = setInterval(renew, WATCH_RENEW_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [rpc, environmentId]);
+  return watching;
+}
 
 export function useRefreshSignal(environmentId: string, options: { poll?: boolean } = {}): number {
   const poll = options.poll ?? true;

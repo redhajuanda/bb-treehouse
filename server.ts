@@ -3,7 +3,8 @@ import {
   type BbPluginApi,
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { CHANGED_CHANNEL, hostContract, rpcContract } from "./contract.js";
+import path from "node:path";
+import { CHANGED_CHANNEL, hostContract, hostSignals, rpcContract } from "./contract.js";
 
 const READ_TIMEOUT_MS = 20_000;
 const WRITE_TIMEOUT_MS = 120_000;
@@ -16,7 +17,22 @@ interface Target {
 }
 
 export default async function plugin(bb: BbPluginApi) {
-  const host = bb.hosts.experimental_client({ contract: hostContract });
+  const host = bb.hosts.experimental_client({ contract: hostContract, experimental_signals: hostSignals });
+  const watchers = new Map<string, Set<string>>();
+  const watchKey = (hostId: string, root: string) => `${hostId}\u0000${path.resolve(root)}`;
+  const stopSignals = host.experimental_onSignal("changed", ({ hostId, payload }) => {
+    for (const environmentId of watchers.get(watchKey(hostId, payload.root)) ?? []) {
+      bb.realtime.publish(CHANGED_CHANNEL, { environmentId });
+    }
+  });
+  const stopExits = host.experimental_onWorkerExit(({ hostId }) => {
+    for (const key of [...watchers.keys()]) if (key.startsWith(`${hostId}\u0000`)) watchers.delete(key);
+  });
+  bb.onDispose(() => {
+    stopSignals();
+    stopExits();
+    watchers.clear();
+  });
   const targets = new Map<string, { at: number; target: Target }>();
 
   async function resolve(environmentId: string): Promise<Target> {
@@ -75,6 +91,15 @@ export default async function plugin(bb: BbPluginApi) {
     diff: async ({ environmentId, ...input }) => {
       const { hostId, root } = await resolve(environmentId);
       return host.call("diff", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
+    watch: async ({ environmentId }) => {
+      const { hostId, root } = await resolve(environmentId);
+      const result = await host.call("watch", { root }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+      const key = watchKey(hostId, root);
+      const set = watchers.get(key) ?? new Set<string>();
+      set.add(environmentId);
+      watchers.set(key, set);
+      return result;
     },
     log: async ({ environmentId, ...input }) => {
       const { hostId, root } = await resolve(environmentId);
