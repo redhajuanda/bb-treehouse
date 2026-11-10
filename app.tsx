@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { DiffTab } from "./ui/DiffTab";
 import { GitView } from "./ui/GitView";
 import { GraphView } from "./ui/GraphView";
+import { FolderPicker, type FolderOption } from "./ui/FolderPicker";
 import { NamesView } from "./ui/NamesView";
 import { indexBadges, useRefreshSignal, useTreehouseRpc, useWorkspaceStatus } from "./ui/data";
 
@@ -27,6 +28,17 @@ function requestMode(mode: Mode) {
 
 let pendingMode: Mode | null = null;
 const queries = new Map<string, string>();
+const fileBases = new Map<string, string>();
+const hiddenIgnored = new Map<string, boolean>();
+
+function parentOf(repo: string): string {
+  const slash = repo.lastIndexOf("/");
+  return slash === -1 ? "" : repo.slice(0, slash);
+}
+
+function baseName(rel: string): string {
+  return rel.slice(rel.lastIndexOf("/") + 1);
+}
 
 function TreehouseTab({ environment }: ExperimentalThreadTabProps) {
   if (environment === null) {
@@ -71,6 +83,66 @@ function Treehouse({ environmentId }: { environmentId: string }) {
     modes.set(environmentId, next);
     setModeState(next);
   };
+  const [baseChoice, setBaseChoice] = useState(() => fileBases.get(environmentId) ?? "");
+  const [hideIgnored, setHideIgnoredState] = useState(() => hiddenIgnored.get(environmentId) ?? false);
+  const setHideIgnored = (next: boolean) => {
+    hiddenIgnored.set(environmentId, next);
+    setHideIgnoredState(next);
+  };
+  const fileOptions = useMemo<FolderOption[]>(() => {
+    const repos = (workspace?.repos ?? []).flatMap((r) => (r.status.repo ? [{ repo: r.repo, status: r.status }] : []));
+    const byKey = new Map<string, FolderOption>();
+    byKey.set("", {
+      key: "",
+      title: workspace?.name ?? "workspace",
+      path: "workspace root",
+      repos: [],
+      changes: repos.reduce((sum, r) => sum + r.status.files.length, 0),
+      all: false,
+      icon: "Folder",
+      subtitle: "Whole workspace",
+    });
+    for (const r of repos) {
+      if (r.repo === "") continue;
+      const parent = parentOf(r.repo);
+      if (parent !== "") {
+        const group = byKey.get(parent);
+        if (group === undefined) {
+          byKey.set(parent, {
+            key: parent,
+            title: baseName(parent),
+            path: parent,
+            repos: [r.repo],
+            changes: r.status.files.length,
+            all: false,
+            icon: "Folder",
+          });
+        } else if (group.icon === "Folder" && group.subtitle === undefined) {
+          group.repos.push(r.repo);
+          group.changes += r.status.files.length;
+        }
+      }
+      byKey.set(r.repo, {
+        key: r.repo,
+        title: baseName(r.repo),
+        path: r.repo,
+        repos: [r.repo, r.status.branch ?? ""],
+        changes: r.status.files.length,
+        all: false,
+        icon: "FolderGit",
+        subtitle: `${r.status.branch ?? "detached"} · ${r.repo}`,
+      });
+    }
+    const [root, ...rest] = [...byKey.values()];
+    rest.sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
+    return root === undefined ? rest : [root, ...rest];
+  }, [workspace]);
+  const base = fileOptions.some((o) => o.key === baseChoice) ? baseChoice : "";
+  const setBase = (next: string) => {
+    fileBases.set(environmentId, next);
+    setBaseChoice(next);
+  };
+
   const setQuery = (next: string) => {
     queries.set(environmentId, next);
     setQueryState(next);
@@ -128,7 +200,15 @@ function Treehouse({ environmentId }: { environmentId: string }) {
       </div>
       {mode === "files" ? (
         <>
-          <div className="flex items-center gap-1 px-2 py-2">
+          {fileOptions.length > 1 ? (
+            <FolderPicker
+              options={fileOptions}
+              value={base}
+              onChange={setBase}
+              placeholder="Search folders and repositories"
+            />
+          ) : null}
+          <div className={cn("flex items-center gap-1 px-2 pb-2", fileOptions.length > 1 ? "pt-0" : "pt-2")}>
             <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-input px-2">
               <Icon name="Search" className="size-4 shrink-0 text-muted-foreground" />
               <input
@@ -154,6 +234,18 @@ function Treehouse({ environmentId }: { environmentId: string }) {
             </div>
             <button
               type="button"
+              title={hideIgnored ? "Show ignored files" : "Hide ignored files"}
+              aria-pressed={hideIgnored}
+              onClick={() => setHideIgnored(!hideIgnored)}
+              className={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-md hover:bg-state-hover hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                hideIgnored ? "bg-state-active text-foreground" : "text-muted-foreground",
+              )}
+            >
+              <Icon name={hideIgnored ? "EyeOff" : "Eye"} className="size-4" />
+            </button>
+            <button
+              type="button"
               title="Collapse all folders"
               onClick={() => setCollapse((n) => n + 1)}
               className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-state-hover hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -163,6 +255,9 @@ function Treehouse({ environmentId }: { environmentId: string }) {
           </div>
           <div className="flex min-h-0 flex-1 flex-col border-t border-border">
             <NamesView
+              key={base}
+              base={base}
+              hideIgnored={hideIgnored}
               rpc={rpc}
               environmentId={environmentId}
               badges={badges}

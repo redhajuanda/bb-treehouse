@@ -68,9 +68,9 @@ export default async function plugin(bb: BbPluginApi) {
       const { hostId, root } = await resolve(environmentId);
       return host.call("workspaceStatus", { root, rescan }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
-    search: async ({ environmentId, query }) => {
+    search: async ({ environmentId, ...input }) => {
       const { hostId, root } = await resolve(environmentId);
-      return host.call("search", { root, query }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+      return host.call("search", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
     },
     diff: async ({ environmentId, ...input }) => {
       const { hostId, root } = await resolve(environmentId);

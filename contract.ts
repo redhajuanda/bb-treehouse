@@ -107,7 +107,7 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
       output: workspaceStatusOutput,
     },
     search: {
-      input: z.object({ ...base, query: z.string().min(1).max(200) }),
+      input: z.object({ ...base, base: relPath, query: z.string().min(1).max(200) }),
       output: z.object({ paths: z.array(z.string()) }),
     },
     diff: {

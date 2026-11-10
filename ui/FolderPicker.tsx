@@ -10,6 +10,7 @@ export interface FolderOption {
   changes: number;
   all: boolean;
   subtitle?: string;
+  icon?: string;
 }
 
 function subtitleOf(option: FolderOption): string {
@@ -119,7 +120,7 @@ export function FolderPicker({
         )}
       >
         <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground">
-          <Icon name={current.all ? "Layers" : "FolderGit"} className="size-3.5" />
+          <Icon name={current.icon ?? (current.all ? "Layers" : "FolderGit")} className="size-3.5" />
         </span>
         <span className="flex min-w-0 flex-1 flex-col leading-tight">
           <span className="truncate text-sm font-medium">{current.title}</span>
@@ -187,7 +188,7 @@ export function FolderPicker({
                         selected ? "bg-foreground text-background" : "bg-secondary text-muted-foreground",
                       )}
                     >
-                      <Icon name={option.all ? "Layers" : "FolderGit"} className="size-4" />
+                      <Icon name={option.icon ?? (option.all ? "Layers" : "FolderGit")} className="size-4" />
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col leading-tight">
                       <span className="truncate text-sm font-medium">{option.title}</span>

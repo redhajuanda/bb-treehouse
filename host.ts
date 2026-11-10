@@ -81,6 +81,20 @@ async function isRepo(root: string): Promise<boolean> {
 
 const COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
+const TOPLEVEL_TTL_MS = 30_000;
+const toplevelCache = new Map<string, { at: number; top: Promise<string | null> }>();
+
+function toplevel(dir: string): Promise<string | null> {
+  const cached = toplevelCache.get(dir);
+  if (cached !== undefined && Date.now() - cached.at < TOPLEVEL_TTL_MS) return cached.top;
+  const top = git(dir, ["rev-parse", "--show-toplevel"]).then(
+    (result) => (result.code === 0 && result.stdout.trim() !== "" ? path.resolve(result.stdout.trim()) : null),
+    () => null,
+  );
+  toplevelCache.set(dir, { at: Date.now(), top });
+  return top;
+}
+
 async function listDir(root: string, rel: string) {
   const dir = inside(root, rel);
   const dirents = await fs.readdir(dir, { withFileTypes: true });
@@ -98,20 +112,29 @@ async function listDir(root: string, rel: string) {
       return { name: d.name, dir: isDir, ignored: false };
     }),
   );
-  if (entries.length > 0 && (await isRepo(root))) {
-    const prefix = rel === "" ? "" : `${rel.replace(/\/+$/u, "")}/`;
-    const input = entries.map((e) => `${prefix}${e.name}${e.dir ? "/" : ""}`).join("\0");
-    const result = await git(root, ["check-ignore", "-z", "--stdin"], `${input}\0`).catch(() => null);
-    if (result !== null && result.code !== 128) {
+  const top = entries.length > 0 ? await toplevel(dir) : null;
+  if (top !== null) {
+    const fromTop = path.relative(top, dir).split(path.sep).join("/");
+    const prefix = fromTop === "" ? "" : `${fromTop}/`;
+    const self = prefix === "" ? [] : [prefix];
+    const input = [...self, ...entries.map((e) => `${prefix}${e.name}${e.dir ? "/" : ""}`)].join("\0");
+    const result = await git(top, ["check-ignore", "-z", "--stdin"], `${input}\0`).catch(() => null);
+    const insideIgnored =
+      result !== null && prefix !== "" && result.stdout.split("\0").some((p) => p.replace(/\/$/u, "") === fromTop);
+    if (result !== null && result.code !== 128 && !insideIgnored) {
       const ignored = new Set(
         result.stdout
           .split("\0")
           .filter(Boolean)
           .map((p) => p.replace(/\/$/u, "")),
       );
-      for (const entry of entries) {
-        if (ignored.has(`${prefix}${entry.name}`)) entry.ignored = true;
-      }
+      await Promise.all(
+        entries.map(async (entry) => {
+          if (!ignored.has(`${prefix}${entry.name}`)) return;
+          if (entry.dir && (await fs.access(path.join(dir, entry.name, ".git")).then(() => true, () => false))) return;
+          entry.ignored = true;
+        }),
+      );
     }
   }
   entries.sort((a, b) => (a.dir === b.dir ? COLLATOR.compare(a.name, b.name) : a.dir ? -1 : 1));
@@ -268,13 +291,33 @@ function fuzzyScore(candidate: string, query: string): number | null {
   return 3 + gaps / 100;
 }
 
-async function search(root: string, query: string) {
-  if (!(await isRepo(root))) return { paths: [] };
+async function search(root: string, base: string, query: string) {
+  const resolvedRoot = path.resolve(root);
+  const dir = inside(root, base);
+  const basePrefix = base === "" ? "" : `${base.replace(/\/+$/u, "")}/`;
+  const tops = new Set<string>();
+  const top = await toplevel(dir);
+  if (top !== null) tops.add(top);
+  const found = await discover(root, false).catch(() => ({ repos: [] as string[], truncated: false }));
+  for (const repo of found.repos) {
+    if (basePrefix === "" || repo === base || repo.startsWith(basePrefix)) tops.add(inside(root, repo));
+  }
   const needle = query.trim().toLowerCase();
+  const seen = new Set<string>();
   const scored: Array<{ p: string; s: number }> = [];
-  for (const p of await allFiles(root)) {
-    const s = fuzzyScore(p, needle);
-    if (s !== null) scored.push({ p, s });
+  for (const t of tops) {
+    const toWorkspace = path.relative(resolvedRoot, t).split(path.sep).join("/");
+    const wsPrefix = toWorkspace === "" ? "" : `${toWorkspace}/`;
+    const files = await allFiles(t).catch(() => [] as string[]);
+    for (const p of files) {
+      if (p.endsWith("/")) continue;
+      const full = `${wsPrefix}${p}`;
+      if (basePrefix !== "" && !full.startsWith(basePrefix)) continue;
+      if (seen.has(full)) continue;
+      seen.add(full);
+      const s = fuzzyScore(full.slice(basePrefix.length), needle);
+      if (s !== null) scored.push({ p: full, s });
+    }
   }
   scored.sort((a, b) => a.s - b.s || a.p.length - b.p.length || COLLATOR.compare(a.p, b.p));
   return { paths: scored.slice(0, MAX_SEARCH_RESULTS).map((e) => e.p) };
@@ -308,8 +351,8 @@ async function diff(root: string, rel: string, staged: boolean, untracked: boole
   return { patch: out === "" ? "" : `${out}\n`, truncated: false };
 }
 
-function invalidate(root: string) {
-  lsFilesCache.delete(root);
+function invalidate(_root: string) {
+  lsFilesCache.clear();
 }
 
 const DISCOVERY_MAX_DEPTH = 4;
@@ -529,11 +572,12 @@ export default experimental_defineHostEntry({
     repoCache.clear();
     lsFilesCache.clear();
     discoveryCache.clear();
+    toplevelCache.clear();
   },
   handlers: {
     listDir: ({ root, rel }) => listDir(root, rel),
     workspaceStatus: ({ root, rescan }) => workspaceStatus(root, rescan),
-    search: ({ root, query }) => search(root, query),
+    search: ({ root, base, query }) => search(root, base, query),
     diff: ({ root, repo, path: rel, staged, untracked }) => diff(inside(root, repo), rel, staged, untracked),
     log: ({ root, repo, all, skip, limit }) => log(inside(root, repo), all, skip, limit),
     show: ({ root, repo, sha }) => show(inside(root, repo), sha),

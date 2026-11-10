@@ -39,6 +39,8 @@ export function NamesView({
   signal,
   query,
   collapseSignal,
+  base,
+  hideIgnored,
 }: {
   rpc: Rpc;
   environmentId: string;
@@ -46,6 +48,8 @@ export function NamesView({
   signal: number;
   query: string;
   collapseSignal: number;
+  base: string;
+  hideIgnored: boolean;
 }) {
   const navigate = useBbNavigate();
   const [dirs, setDirs] = useState<Map<string, DirEntry[]>>(() => new Map());
@@ -73,7 +77,7 @@ export function NamesView({
             setError(null);
           },
           (cause: unknown) => {
-            if (rel === "") setError(errorMessage(cause));
+            if (rel === base) setError(errorMessage(cause));
             setExpanded((prev) => {
               if (!prev.has(rel)) return prev;
               const next = new Set(prev);
@@ -93,11 +97,11 @@ export function NamesView({
       inflight.current.set(rel, promise);
       return promise;
     },
-    [rpc, environmentId],
+    [rpc, environmentId, base],
   );
 
   useEffect(() => {
-    void load("");
+    void load(base);
     for (const rel of expanded) void load(rel);
   }, [load, signal]);
 
@@ -142,6 +146,7 @@ export function NamesView({
       const entries = dirs.get(rel);
       if (entries === undefined) return;
       for (const entry of entries) {
+        if (hideIgnored && entry.ignored) continue;
         const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
         const isOpen = entry.dir && expanded.has(path);
         out.push({
@@ -156,17 +161,19 @@ export function NamesView({
         if (isOpen) walk(path, depth + 1);
       }
     };
-    walk("", 0);
+    walk(base, 0);
     return out;
-  }, [dirs, expanded, loading]);
+  }, [dirs, expanded, loading, base, hideIgnored]);
 
   if (query.trim() !== "") {
-    return <SearchResults rpc={rpc} environmentId={environmentId} query={query} badges={badges} onOpen={open} />;
+    return (
+      <SearchResults rpc={rpc} environmentId={environmentId} base={base} query={query} badges={badges} onOpen={open} />
+    );
   }
-  if (error !== null && !dirs.has("")) {
+  if (error !== null && !dirs.has(base)) {
     return <p className="px-4 py-3 text-sm text-destructive">{error}</p>;
   }
-  if (!dirs.has("")) {
+  if (!dirs.has(base)) {
     return <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>;
   }
   return (
@@ -249,12 +256,14 @@ const TreeRow = memo(function TreeRow({
 function SearchResults({
   rpc,
   environmentId,
+  base,
   query,
   badges,
   onOpen,
 }: {
   rpc: Rpc;
   environmentId: string;
+  base: string;
   query: string;
   badges: BadgeIndex;
   onOpen: (path: string) => void;
@@ -264,7 +273,7 @@ function SearchResults({
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
-      rpc.call("search", { environmentId, query: query.trim() }).then(
+      rpc.call("search", { environmentId, base, query: query.trim() }).then(
         (result) => {
           if (!cancelled) {
             setPaths(result.paths);
@@ -280,7 +289,7 @@ function SearchResults({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [rpc, environmentId, query]);
+  }, [rpc, environmentId, base, query]);
 
   if (error !== null) return <p className="px-4 py-3 text-sm text-destructive">{error}</p>;
   if (paths === null) return <p className="px-4 py-3 text-sm text-muted-foreground">Searching…</p>;
