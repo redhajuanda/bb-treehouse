@@ -10,7 +10,7 @@
     "name": "Treehouse",
     "description": "A file tree with git status badges and a Git tab to stage, commit, push and pull",
     "branding": {
-      "icon": "FolderTree"
+      "icon": "Folder02"
     },
     "server": "./server.ts",
     "host": "./host.ts",

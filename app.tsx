@@ -72,7 +72,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
             onClick={() => setCollapse((n) => n + 1)}
             className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground"
           >
-            <Icon name="ListCollapse" className="size-4" />
+            <Icon name="ChevronsUp" className="size-4" />
           </button>
         ) : null}
         <button
@@ -84,14 +84,14 @@ function Treehouse({ environmentId }: { environmentId: string }) {
           }}
           className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground"
         >
-          <Icon name="RefreshCw" className="size-4" />
+          <Icon name="ArrowReloadHorizontal" className="size-4" />
         </button>
       </div>
       {mode === "names" ? (
         <>
           <div className="px-2 py-2">
             <div className="flex items-center gap-2 rounded-md border border-input px-2">
-              <Icon name="ListFilter" className="size-4 shrink-0 text-muted-foreground" />
+              <Icon name="Search" className="size-4 shrink-0 text-muted-foreground" />
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -104,7 +104,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
               />
               {query === "" ? null : (
                 <button type="button" title="Clear" onClick={() => setQuery("")} className="text-muted-foreground hover:text-foreground">
-                  <Icon name="X" className="size-3.5" />
+                  <Icon name="CircleX" className="size-3.5" />
                 </button>
               )}
             </div>
@@ -153,7 +153,7 @@ export default definePluginApp((app) => {
     id: "treehouse",
     title: "Files",
     tooltip: "Treehouse: files and git",
-    icon: "FolderTree",
+    icon: "Folder02",
     layout: "flush",
     component: TreehouseTab,
   });

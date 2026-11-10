@@ -207,7 +207,7 @@ const TreeRow = memo(function TreeRow({
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
         {row.dir ? (
           <Icon
-            name={row.loading ? "LoaderCircle" : row.expanded ? "ChevronDown" : "ChevronRight"}
+            name={row.loading ? "Spinner" : row.expanded ? "ChevronDown" : "ChevronRight"}
             className={cn("size-3.5", row.loading && "animate-spin")}
           />
         ) : null}
@@ -218,7 +218,7 @@ const TreeRow = memo(function TreeRow({
       />
       <span className={cn("min-w-0 flex-1 truncate", tone)}>{row.name}</span>
       {row.ignored ? (
-        <Icon name="Ban" className="size-3.5 shrink-0 text-muted-foreground" />
+        <Icon name="Unavailable" className="size-3.5 shrink-0 text-muted-foreground" />
       ) : badge !== undefined ? (
         <span className={cn("shrink-0 text-xs font-semibold", tone)}>{badge}</span>
       ) : null}

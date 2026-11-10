@@ -298,21 +298,16 @@ export function GitView({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {groups.length > 1 || repos.length > 1 ? (
-        <div className="px-2 py-2">
-          <div className="relative">
-            <Icon
-              name="FolderGit2"
-              className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-            />
+        <div className="flex items-center gap-2 px-3 py-2">
+          <span className="shrink-0 text-xs text-muted-foreground">Folder</span>
+          <div className="relative min-w-0 flex-1">
             <select
               value={group}
               onChange={(event) => setChoice(event.target.value)}
               aria-label="Folder"
-              className="h-8 w-full cursor-pointer appearance-none rounded-md border border-input bg-transparent pl-8 pr-8 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-7 w-full cursor-pointer appearance-none truncate rounded-full bg-secondary pl-3 pr-7 text-xs font-medium text-secondary-foreground hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
-              <option value={ALL}>
-                All repositories ({repos.length})
-              </option>
+              <option value={ALL}>All repositories ({repos.length})</option>
               {groups.map((g) => (
                 <option key={g.key} value={g.key}>
                   {g.label} · {g.members.length} repo{g.members.length === 1 ? "" : "s"}
@@ -321,14 +316,14 @@ export function GitView({
               ))}
             </select>
             <Icon
-              name="ChevronsUpDown"
-              className="pointer-events-none absolute right-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              name="ChevronDown"
+              className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
             />
           </div>
-          {workspace.truncated ? (
-            <p className="mt-1 text-xs text-muted-foreground">Repository scan stopped early; some may be missing.</p>
-          ) : null}
         </div>
+      ) : null}
+      {workspace.truncated ? (
+        <p className="px-3 pb-1 text-xs text-muted-foreground">Repository scan stopped early; some may be missing.</p>
       ) : null}
       <VirtualList
         items={items}
@@ -440,14 +435,19 @@ const RepoHeader = memo(function RepoHeader({
           onToggle(repo, expanded);
         }
       }}
-      className="mx-1 mt-1 flex h-[30px] cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 text-sm hover:bg-state-hover"
+      className="flex h-full cursor-pointer items-center gap-1.5 border-t border-border px-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
     >
       <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0 text-muted-foreground" />
-      <Icon name="GitFork" className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 shrink truncate font-medium">{label}</span>
+      <span className="min-w-0 shrink truncate font-semibold">{label}</span>
+      <Icon name="GitBranch" className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
         {status.branch ?? "detached"}
       </span>
+      {status.files.length > 0 ? (
+        <span className="shrink-0 rounded-full bg-secondary px-1.5 text-xs text-muted-foreground">
+          {status.files.length}
+        </span>
+      ) : null}
       {status.files.length > 0 ? (
         <span className="shrink-0 font-mono text-xs">
           <span className="text-diff-added">+{add}</span> <span className="text-diff-removed">-{del}</span>
@@ -463,7 +463,7 @@ const RepoHeader = memo(function RepoHeader({
           onPull(repo);
         }}
       >
-        <Icon name={busy === "pull" ? "LoaderCircle" : "ArrowDown"} className={cn("size-3.5", busy === "pull" && "animate-spin")} />
+        <Icon name={busy === "pull" ? "Spinner" : "ArrowDown"} className={cn("size-3.5", busy === "pull" && "animate-spin")} />
         {status.behind}
       </button>
       <button
@@ -476,7 +476,7 @@ const RepoHeader = memo(function RepoHeader({
           onPush(repo);
         }}
       >
-        <Icon name={busy === "push" ? "LoaderCircle" : "ArrowUp"} className={cn("size-3.5", busy === "push" && "animate-spin")} />
+        <Icon name={busy === "push" ? "Spinner" : "ArrowUp"} className={cn("size-3.5", busy === "push" && "animate-spin")} />
         {status.ahead}
       </button>
     </div>
@@ -534,7 +534,7 @@ function CommitBox({
           disabled={busy !== null || message.trim() === "" || status.files.length === 0}
           onClick={() => void commit()}
         >
-          <Icon name={busy === "commit" ? "LoaderCircle" : "Check"} className={cn(busy === "commit" && "animate-spin")} />
+          <Icon name={busy === "commit" ? "Spinner" : "Check"} className={cn(busy === "commit" && "animate-spin")} />
           {stagedCount === 0 ? "Commit All" : "Commit"}
         </Button>
         <Button
@@ -683,7 +683,7 @@ const SectionHeader = memo(function SectionHeader({
       ) : (
         <>
           <ConfirmButton
-            icon="Undo2"
+            icon="RotateCcw"
             title="Discard all changes"
             disabled={disabled}
             onConfirm={() => onDiscard(repo, files.filter(isUnstaged))}
@@ -750,7 +750,7 @@ const FileRow = memo(function FileRow({
         ) : (
           <>
             <ConfirmButton
-              icon="Undo2"
+              icon="RotateCcw"
               title="Discard changes"
               disabled={disabled}
               onConfirm={() => onDiscard(repo, [change])}
