@@ -280,6 +280,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
             workspace={workspace}
             workspaceError={error}
             reload={reload}
+            signal={signal}
           />
         </div>
       )}

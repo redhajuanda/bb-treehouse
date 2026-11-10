@@ -709,6 +709,96 @@ async function watch(root: string, context: HostContext): Promise<{ watching: bo
   return { watching: state.watching };
 }
 
+const MAX_BRANCHES = 1000;
+const COMPARE_MAX_FILES = 3000;
+
+async function branches(repoRoot: string) {
+  const [current, originHead, refs] = await Promise.all([
+    git(repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+    git(repoRoot, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]),
+    git(repoRoot, [
+      "for-each-ref",
+      "--sort=-committerdate",
+      `--count=${MAX_BRANCHES}`,
+      "--format=%(refname)",
+      "refs/heads",
+      "refs/remotes",
+    ]),
+  ]);
+  const list: Array<{ name: string; remote: boolean }> = [];
+  for (const ref of refs.stdout.split("\n")) {
+    if (ref.startsWith("refs/heads/")) list.push({ name: ref.slice(11), remote: false });
+    else if (ref.startsWith("refs/remotes/") && !ref.endsWith("/HEAD")) list.push({ name: ref.slice(13), remote: true });
+  }
+  const names = new Set(list.map((b) => b.name));
+  const currentName = current.code === 0 ? current.stdout.trim() : null;
+  const candidates = [
+    originHead.code === 0 ? originHead.stdout.trim() : "",
+    "main",
+    "master",
+    "origin/main",
+    "origin/master",
+    "develop",
+  ];
+  const defaultBase = candidates.find((c) => c !== "" && names.has(c) && c !== currentName) ?? null;
+  return { current: currentName, defaultBase, branches: list };
+}
+
+const STATUS_LETTERS = new Set(["A", "M", "D", "R", "C", "T"]);
+
+async function compare(repoRoot: string, base: string) {
+  const mergeBase = await git(repoRoot, ["merge-base", base, "HEAD"]);
+  if (mergeBase.code !== 0) {
+    return { base, found: false, ahead: 0, behind: 0, files: [], truncated: false };
+  }
+  const mb = mergeBase.stdout.trim();
+  const [counts, nameStatus, numstat] = await Promise.all([
+    git(repoRoot, ["rev-list", "--left-right", "--count", `${base}...HEAD`]),
+    git(repoRoot, ["diff", "--name-status", "-z", "-M", mb, "HEAD"]),
+    git(repoRoot, ["diff", "--numstat", "-z", "-M", mb, "HEAD"]),
+  ]);
+  const [behind, ahead] = counts.stdout.trim().split(/\s+/u).map(Number);
+  const stats = new Map<string, { add: number | null; del: number | null }>();
+  if (numstat.code === 0) parseNumstat(numstat.stdout, stats);
+  const files: Array<{ path: string; orig: string | null; status: "A" | "M" | "D" | "R" | "C" | "T"; add: number | null; del: number | null }> = [];
+  let truncated = false;
+  const parts = nameStatus.stdout.split("\0");
+  for (let i = 0; i < parts.length; ) {
+    const code = parts[i];
+    if (code === undefined || code === "") {
+      i += 1;
+      continue;
+    }
+    const letter = code[0] ?? "M";
+    const renamed = letter === "R" || letter === "C";
+    const first = parts[i + 1] ?? "";
+    const second = renamed ? (parts[i + 2] ?? "") : null;
+    i += renamed ? 3 : 2;
+    if (files.length >= COMPARE_MAX_FILES) {
+      truncated = true;
+      break;
+    }
+    const filePath = second ?? first;
+    const stat = stats.get(filePath);
+    files.push({
+      path: filePath,
+      orig: renamed ? first : null,
+      status: (STATUS_LETTERS.has(letter) ? letter : "M") as "A" | "M" | "D" | "R" | "C" | "T",
+      add: stat?.add ?? null,
+      del: stat?.del ?? null,
+    });
+  }
+  return { base, found: true, ahead: ahead ?? 0, behind: behind ?? 0, files, truncated };
+}
+
+async function compareDiff(repoRoot: string, base: string, rel: string) {
+  const [safe] = relPaths(repoRoot, [rel]);
+  if (safe === undefined) throw new Error("Missing path");
+  const out = await gitOk(repoRoot, ["diff", "--no-color", "--no-ext-diff", "-M", `${base}...HEAD`, "--", safe]);
+  if (Buffer.byteLength(out) > PATCH_MAX_BYTES) return { patch: "", truncated: true };
+  return { patch: out === "" ? "" : `${out}\n`, truncated: false };
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   experimental_signals: hostSignals,
@@ -736,6 +826,9 @@ export default experimental_defineHostEntry({
     watch: ({ root }, context) => watch(root, context),
     log: ({ root, repo, all, skip, limit }) => log(inside(root, repo), all, skip, limit),
     show: ({ root, repo, sha }) => show(inside(root, repo), sha),
+    branches: ({ root, repo }) => branches(inside(root, repo)),
+    compare: ({ root, repo, base }) => compare(inside(root, repo), base),
+    compareDiff: ({ root, repo, base, path: rel }) => compareDiff(inside(root, repo), base, rel),
     stage: async ({ root, repo, paths }) => {
       const r = inside(root, repo);
       invalidate(root);

@@ -92,6 +92,39 @@ const showOutput = z.object({
 });
 export type CommitDetail = z.infer<typeof showOutput>;
 
+const refName = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[^\s~^:?*\[\\]+$/u)
+  .refine((value) => !value.startsWith("-") && !value.includes(".."), "Invalid branch name");
+
+export const branchSchema = z.object({ name: z.string(), remote: z.boolean() });
+const branchesOutput = z.object({
+  current: z.string().nullable(),
+  defaultBase: z.string().nullable(),
+  branches: z.array(branchSchema),
+});
+export type BranchList = z.infer<typeof branchesOutput>;
+
+export const compareFileSchema = z.object({
+  path: z.string(),
+  orig: z.string().nullable(),
+  status: z.enum(["A", "M", "D", "R", "C", "T"]),
+  add: z.number().int().nullable(),
+  del: z.number().int().nullable(),
+});
+export type CompareFile = z.infer<typeof compareFileSchema>;
+const compareOutput = z.object({
+  base: z.string(),
+  found: z.boolean(),
+  ahead: z.number().int(),
+  behind: z.number().int(),
+  files: z.array(compareFileSchema),
+  truncated: z.boolean(),
+});
+export type CompareResult = z.infer<typeof compareOutput>;
+
 const message = z.string().trim().min(1).max(20000);
 const fileLists = { tracked: z.array(z.string().min(1)), untracked: z.array(z.string().min(1)) };
 
@@ -128,6 +161,12 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
       output: logOutput,
     },
     show: { input: z.object({ ...repo, sha: shaSchema }), output: showOutput },
+    branches: { input: z.object(repo), output: branchesOutput },
+    compare: { input: z.object({ ...repo, base: refName }), output: compareOutput },
+    compareDiff: {
+      input: z.object({ ...repo, base: refName, path: relPath.min(1) }),
+      output: z.object({ patch: z.string(), truncated: z.boolean() }),
+    },
     stage: { input: z.object({ ...repo, paths: pathList }), output: ok },
     unstage: { input: z.object({ ...repo, paths: pathList }), output: ok },
     discard: { input: z.object({ ...repo, ...fileLists }), output: ok },

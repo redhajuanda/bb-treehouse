@@ -27,10 +27,21 @@ const commitParamsSchema = z.object({
   sha: z.string().regex(/^[0-9a-f]{4,40}$/iu),
   subject: z.string(),
 });
-export const diffParamsSchema = z.union([commitParamsSchema, fileParamsSchema]);
+const compareParamsSchema = z.object({
+  kind: z.literal("compare"),
+  repo: z.string(),
+  base: z.string().min(1),
+  path: z.string().min(1),
+});
+export const diffParamsSchema = z.union([commitParamsSchema, compareParamsSchema, fileParamsSchema]);
 export type FileDiffParams = z.infer<typeof fileParamsSchema>;
 export type CommitParams = z.infer<typeof commitParamsSchema>;
-export type DiffParams = FileDiffParams | CommitParams;
+export type CompareDiffParams = z.infer<typeof compareParamsSchema>;
+export type DiffParams = FileDiffParams | CommitParams | CompareDiffParams;
+
+export function compareTabTitle(params: CompareDiffParams): string {
+  return `${params.path.slice(params.path.lastIndexOf("/") + 1)} (vs ${params.base})`;
+}
 
 export function diffTabTitle(params: FileDiffParams): string {
   const name = params.path.slice(params.path.lastIndexOf("/") + 1);
@@ -61,18 +72,25 @@ export function DiffTab({ environment, params }: ExperimentalThreadActionTabProp
   return <DiffView key={environment.id} environmentId={environment.id} params={value} />;
 }
 
-function DiffView({ environmentId, params }: { environmentId: string; params: FileDiffParams }) {
+function DiffView({ environmentId, params }: { environmentId: string; params: FileDiffParams | CompareDiffParams }) {
   const rpc = useTreehouseRpc();
   const navigate = useBbNavigate();
   const watching = useWatchLease(rpc, environmentId);
   const signal = useRefreshSignal(environmentId, { poll: watching === false });
   const [result, setResult] = useState<{ patch: string; truncated: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { repo, path, staged, untracked } = params;
+  const { repo, path } = params;
+  const compareBase = params.kind === "compare" ? params.base : null;
+  const staged = params.kind === "compare" ? false : params.staged;
+  const untracked = params.kind === "compare" ? false : params.untracked;
 
   useEffect(() => {
     let cancelled = false;
-    rpc.call("diff", { environmentId, repo, path, staged, untracked }).then(
+    const request =
+      compareBase !== null
+        ? rpc.call("compareDiff", { environmentId, repo, base: compareBase, path })
+        : rpc.call("diff", { environmentId, repo, path, staged, untracked });
+    request.then(
       (next) => {
         if (cancelled) return;
         setResult((prev) =>
@@ -87,7 +105,7 @@ function DiffView({ environmentId, params }: { environmentId: string; params: Fi
     return () => {
       cancelled = true;
     };
-  }, [rpc, environmentId, repo, path, staged, untracked, signal]);
+  }, [rpc, environmentId, repo, path, staged, untracked, compareBase, signal]);
 
   const full = repo === "" ? path : `${repo}/${path}`;
   const slash = full.lastIndexOf("/");
@@ -100,7 +118,7 @@ function DiffView({ environmentId, params }: { environmentId: string; params: Fi
           {slash === -1 ? null : <span className="ml-2 text-xs text-muted-foreground">{full.slice(0, slash)}</span>}
         </span>
         <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">
-          {untracked ? "untracked" : staged ? "staged" : "working tree"}
+          {compareBase !== null ? `vs ${compareBase}` : untracked ? "untracked" : staged ? "staged" : "working tree"}
         </span>
         <button
           type="button"

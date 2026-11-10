@@ -1,12 +1,19 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { experimental_useAppPanel, useBbNavigate } from "@get-bb/plugin-sdk/app";
-import type { Change, RepoStatus, WorkspaceStatus } from "../contract";
+import type { Change, CompareFile, CompareResult, RepoStatus, WorkspaceStatus } from "../contract";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { ROW_HEIGHT, VirtualList } from "./VirtualList";
 import { FolderPicker, type FolderOption } from "./FolderPicker";
 import { FileIcon } from "./FileIcon";
-import { DIFF_TAB_REFERENCE, diffTabTitle, type FileDiffParams } from "./DiffTab";
+import {
+  DIFF_TAB_REFERENCE,
+  compareTabTitle,
+  diffTabTitle,
+  type CompareDiffParams,
+  type FileDiffParams,
+} from "./DiffTab";
+import { BranchPicker } from "./BranchPicker";
 import { badgeClass, badgeOf, errorMessage, type Rpc } from "./data";
 
 type Section = "staged" | "changes";
@@ -45,7 +52,18 @@ type Item =
   | { kind: "commit"; repo: string; status: Repo; notice: boolean }
   | { kind: "section"; repo: string; section: Section; count: number; collapsed: boolean }
   | { kind: "file"; repo: string; section: Section; change: Change }
-  | { kind: "clean"; repo: string };
+  | { kind: "clean"; repo: string }
+  | { kind: "compare"; repo: string; base: string | null; open: boolean; state: CompareState | undefined }
+  | { kind: "compare-file"; repo: string; base: string; file: CompareFile }
+  | { kind: "compare-note"; repo: string; text: string; tone: "muted" | "error" };
+
+type CompareState =
+  | { status: "loading"; base: string }
+  | { status: "ready"; base: string; result: CompareResult }
+  | { status: "error"; base: string; message: string };
+
+const compareOpenByEnv = new Map<string, Map<string, boolean>>();
+const compareBaseByEnv = new Map<string, Map<string, string>>();
 
 interface Selected {
   repo: string;
@@ -105,6 +123,12 @@ function keyOf(item: Item): string {
       return `s:${item.repo}:${item.section}`;
     case "file":
       return `f:${item.repo}:${item.section}:${item.change.path}`;
+    case "compare":
+      return `x:${item.repo}`;
+    case "compare-file":
+      return `xf:${item.repo}:${item.file.path}`;
+    case "compare-note":
+      return `xn:${item.repo}`;
   }
 }
 
@@ -114,12 +138,14 @@ export function GitView({
   workspace,
   workspaceError,
   reload,
+  signal,
 }: {
   rpc: Rpc;
   environmentId: string;
   workspace: WorkspaceStatus | null;
   workspaceError: string | null;
   reload: () => void;
+  signal: number;
 }) {
   const navigate = useBbNavigate();
   const [busy, setBusy] = useState<Map<string, string>>(() => new Map());
@@ -205,6 +231,111 @@ export function GitView({
     [expanded, visibleRepos.length],
   );
 
+  const [compareOpen, setCompareOpen] = useState<Map<string, boolean>>(
+    () => compareOpenByEnv.get(environmentId) ?? new Map(),
+  );
+  const [compareBase, setCompareBase] = useState<Map<string, string>>(
+    () => compareBaseByEnv.get(environmentId) ?? new Map(),
+  );
+  const [compareDefaults, setCompareDefaults] = useState<Map<string, string | null>>(() => new Map());
+  const [compareData, setCompareData] = useState<Map<string, CompareState>>(() => new Map());
+
+  const isCompareOpen = useCallback(
+    (repo: string, status: Repo) => compareOpen.get(repo) ?? status.files.length === 0,
+    [compareOpen],
+  );
+  const baseFor = useCallback(
+    (repo: string) => compareBase.get(repo) ?? compareDefaults.get(repo) ?? null,
+    [compareBase, compareDefaults],
+  );
+
+  const compareTargets = useMemo(
+    () =>
+      visibleRepos
+        .filter(({ repo, status }) => isExpanded(repo, status) && isCompareOpen(repo, status))
+        .map(({ repo, status }) => ({ repo, head: `${status.branch ?? ""}:${status.ahead}:${status.behind}` })),
+    [visibleRepos, isExpanded, isCompareOpen],
+  );
+  const compareKey = compareTargets.map((t) => `${t.repo}\u0000${baseFor(t.repo) ?? ""}\u0000${t.head}`).join("\n");
+
+  useEffect(() => {
+    let cancelled = false;
+    for (const { repo } of compareTargets) {
+      const base = baseFor(repo);
+      if (base === null) {
+        if (compareDefaults.has(repo)) continue;
+        setCompareDefaults((prev) => new Map(prev).set(repo, null));
+        rpc.call("branches", { environmentId, repo }).then(
+          (list) => {
+            if (cancelled) return;
+            setCompareDefaults((prev) => new Map(prev).set(repo, list.defaultBase));
+            if (list.defaultBase === null) {
+              setCompareData((prev) =>
+                new Map(prev).set(repo, { status: "error", base: "", message: "No main branch found; pick one." }),
+              );
+            }
+          },
+          () => undefined,
+        );
+        continue;
+      }
+      setCompareData((prev) => {
+        const current = prev.get(repo);
+        if (current !== undefined && current.base === base && current.status !== "error") return prev;
+        return new Map(prev).set(repo, { status: "loading", base });
+      });
+      rpc.call("compare", { environmentId, repo, base }).then(
+        (result) => {
+          if (cancelled) return;
+          setCompareData((prev) => {
+            const current = prev.get(repo);
+            if (
+              current?.status === "ready" &&
+              current.base === base &&
+              JSON.stringify(current.result) === JSON.stringify(result)
+            ) {
+              return prev;
+            }
+            return new Map(prev).set(repo, { status: "ready", base, result });
+          });
+        },
+        (cause: unknown) => {
+          if (!cancelled)
+            setCompareData((prev) => new Map(prev).set(repo, { status: "error", base, message: errorMessage(cause) }));
+        },
+      );
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [compareKey, signal, rpc, environmentId]);
+
+  const toggleCompare = useCallback(
+    (repo: string, current: boolean) => {
+      setCompareOpen((prev) => {
+        const next = new Map(prev).set(repo, !current);
+        compareOpenByEnv.set(environmentId, next);
+        return next;
+      });
+    },
+    [environmentId],
+  );
+  const chooseBase = useCallback(
+    (repo: string, base: string) => {
+      setCompareBase((prev) => {
+        const next = new Map(prev).set(repo, base);
+        compareBaseByEnv.set(environmentId, next);
+        return next;
+      });
+      setCompareOpen((prev) => {
+        const next = new Map(prev).set(repo, true);
+        compareOpenByEnv.set(environmentId, next);
+        return next;
+      });
+    },
+    [environmentId],
+  );
+
   const items = useMemo(() => {
     const out: Item[] = [];
     for (const { repo, status } of visibleRepos) {
@@ -221,7 +352,6 @@ export function GitView({
       out.push({ kind: "commit", repo, status, notice: notices.has(repo) || status.truncated });
       if (status.files.length === 0) {
         out.push({ kind: "clean", repo });
-        continue;
       }
       const lists: Array<[Section, Change[]]> = [
         ["staged", status.files.filter(isStaged)],
@@ -234,9 +364,35 @@ export function GitView({
         if (isCollapsed) continue;
         for (const change of list) out.push({ kind: "file", repo, section, change });
       }
+      const compareIsOpen = isCompareOpen(repo, status);
+      const base = baseFor(repo);
+      const state = compareData.get(repo);
+      out.push({ kind: "compare", repo, base, open: compareIsOpen, state: state?.base === base ? state : undefined });
+      if (!compareIsOpen) continue;
+      if (state === undefined || base === null || state.base !== base || state.status === "loading") {
+        if (state?.status === "error" && base === null) {
+          out.push({ kind: "compare-note", repo, text: state.message, tone: "muted" });
+        } else {
+          out.push({ kind: "compare-note", repo, text: "Comparing…", tone: "muted" });
+        }
+        continue;
+      }
+      if (state.status === "error") {
+        out.push({ kind: "compare-note", repo, text: state.message, tone: "error" });
+        continue;
+      }
+      if (!state.result.found) {
+        out.push({ kind: "compare-note", repo, text: `No common history with ${base}.`, tone: "muted" });
+        continue;
+      }
+      if (state.result.files.length === 0) {
+        out.push({ kind: "compare-note", repo, text: `No differences from ${base}.`, tone: "muted" });
+        continue;
+      }
+      for (const file of state.result.files) out.push({ kind: "compare-file", repo, base, file });
     }
     return out;
-  }, [visibleRepos, isExpanded, labelFor, collapsed, notices]);
+  }, [visibleRepos, isExpanded, labelFor, collapsed, notices, isCompareOpen, baseFor, compareData]);
 
   const toggleRepo = useCallback(
     (repo: string, current: boolean) => {
@@ -341,6 +497,10 @@ export function GitView({
         const params: FileDiffParams = { kind: "file", ...value };
         panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: diffTabTitle(params) });
       },
+      openCompare: (repo: string, base: string, path: string) => {
+        const params: CompareDiffParams = { kind: "compare", repo, base, path };
+        panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: compareTabTitle(params) });
+      },
     }),
     [run, rpc, environmentId, navigate, panel],
   );
@@ -403,9 +563,36 @@ export function GitView({
               return (
                 <p className="relative flex h-full items-center pl-11 text-xs text-muted-foreground">
                   <RepoGuide repo={item.repo} />
-                  No changes
+                  No uncommitted changes
                 </p>
               );
+            case "compare":
+              return (
+                <CompareHeader
+                  rpc={rpc}
+                  environmentId={environmentId}
+                  repo={item.repo}
+                  base={item.base}
+                  open={item.open}
+                  state={item.state}
+                  onToggle={toggleCompare}
+                  onBase={chooseBase}
+                />
+              );
+            case "compare-note":
+              return (
+                <p
+                  className={cn(
+                    "relative flex h-full items-center pl-11 text-xs",
+                    item.tone === "error" ? "text-destructive" : "text-muted-foreground",
+                  )}
+                >
+                  <RepoGuide repo={item.repo} />
+                  <span className="truncate">{item.text}</span>
+                </p>
+              );
+            case "compare-file":
+              return <CompareFileRow repo={item.repo} base={item.base} file={item.file} onOpen={actions.openCompare} />;
             case "section":
               return (
                 <SectionHeader
@@ -666,7 +853,7 @@ function CommitBox({
           title="More commit actions"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
-          disabled={busy !== null}
+          disabled={!COMMIT_MODES.some((entry) => canRun(entry.mode))}
           onClick={() => setMenuOpen((open) => !open)}
           className="flex w-8 shrink-0 items-center justify-center rounded-r-md bg-[oklch(0.56_0.17_255)] text-white hover:bg-[oklch(0.51_0.17_255)] disabled:opacity-50"
         >
@@ -924,6 +1111,127 @@ const FileRow = memo(function FileRow({
         {change.del === null || change.del === 0 ? null : <span className="text-diff-removed"> -{change.del}</span>}
       </span>
       <span className={cn("w-3 shrink-0 text-center text-xs font-semibold", tone)}>{badge}</span>
+    </div>
+  );
+});
+
+function CompareHeader({
+  rpc,
+  environmentId,
+  repo,
+  base,
+  open,
+  state,
+  onToggle,
+  onBase,
+}: {
+  rpc: Rpc;
+  environmentId: string;
+  repo: string;
+  base: string | null;
+  open: boolean;
+  state: CompareState | undefined;
+  onToggle: (repo: string, current: boolean) => void;
+  onBase: (repo: string, base: string) => void;
+}) {
+  const result = state?.status === "ready" ? state.result : null;
+  let add = 0;
+  let del = 0;
+  for (const f of result?.files ?? []) {
+    add += f.add ?? 0;
+    del += f.del ?? 0;
+  }
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      onClick={() => onToggle(repo, open)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onToggle(repo, open);
+        }
+      }}
+      className="relative flex h-full items-center pr-1"
+    >
+      <RepoGuide repo={repo} />
+      <span className="ml-6 flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground">
+        <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0" />
+        <span className="shrink-0 font-semibold uppercase tracking-wide">Compare</span>
+        <span className="shrink-0">with</span>
+        <BranchPicker
+          rpc={rpc}
+          environmentId={environmentId}
+          repo={repo}
+          value={base ?? "pick a branch"}
+          onChange={(next) => onBase(repo, next)}
+        />
+        <span className="min-w-0 flex-1" />
+        {result !== null && result.found ? (
+          <span className="flex shrink-0 items-center gap-1.5 font-mono">
+            <span title={`${result.ahead} commit${result.ahead === 1 ? "" : "s"} not in ${result.base}`}>
+              ↑{result.ahead}
+            </span>
+            <span title={`${result.behind} commit${result.behind === 1 ? "" : "s"} in ${result.base} not here`}>
+              ↓{result.behind}
+            </span>
+            <span className="font-sans">
+              · {result.files.length} file{result.files.length === 1 ? "" : "s"}
+            </span>
+            {add > 0 ? <span className="text-diff-added">+{add}</span> : null}
+            {del > 0 ? <span className="text-diff-removed">-{del}</span> : null}
+          </span>
+        ) : state?.status === "loading" ? (
+          <Icon name="Spinner" className="size-3.5 shrink-0 animate-spin" />
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+const COMPARE_TONES: Record<CompareFile["status"], string> = {
+  A: "text-diff-added",
+  C: "text-diff-added",
+  D: "text-diff-removed",
+  M: "text-warning",
+  R: "text-warning",
+  T: "text-warning",
+};
+
+const CompareFileRow = memo(function CompareFileRow({
+  repo,
+  base,
+  file,
+  onOpen,
+}: {
+  repo: string;
+  base: string;
+  file: CompareFile;
+  onOpen: (repo: string, base: string, path: string) => void;
+}) {
+  const { name, dir } = splitName(file.path);
+  const tone = COMPARE_TONES[file.status];
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      title={file.orig === null ? file.path : `${file.orig} → ${file.path}`}
+      onClick={() => onOpen(repo, base, file.path)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onOpen(repo, base, file.path);
+      }}
+      className="relative flex h-full items-center gap-1.5 pl-11 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
+    >
+      <RepoGuide repo={repo} />
+      <FileIcon name={name} className={cn(file.status === "D" && "opacity-50")} />
+      <span className={cn("shrink-0", file.status === "D" && "line-through")}>{name}</span>
+      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{dir}</span>
+      <span className="shrink-0 font-mono text-xs">
+        {file.add !== null && file.add > 0 ? <span className="text-diff-added">+{file.add}</span> : null}
+        {file.del !== null && file.del > 0 ? <span className="text-diff-removed"> -{file.del}</span> : null}
+      </span>
+      <span className={cn("w-3 shrink-0 text-center text-xs font-semibold", tone)}>{file.status}</span>
     </div>
   );
 });

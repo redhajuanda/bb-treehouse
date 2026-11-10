@@ -101,6 +101,18 @@ export default async function plugin(bb: BbPluginApi) {
       watchers.set(key, set);
       return result;
     },
+    branches: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("branches", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
+    compare: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("compare", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
+    compareDiff: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("compareDiff", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
     log: async ({ environmentId, ...input }) => {
       const { hostId, root } = await resolve(environmentId);
       return host.call("log", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
