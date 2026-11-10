@@ -492,6 +492,7 @@ async function log(repoRoot: string, all: boolean, skip: number, limit: number) 
   const args = [
     "log",
     "--topo-order",
+    "--decorate=full",
     `--skip=${skip}`,
     `--max-count=${limit + 1}`,
     `--format=%H${FIELD}%P${FIELD}%an${FIELD}%ae${FIELD}%at${FIELD}%D${FIELD}%s${RECORD}`,

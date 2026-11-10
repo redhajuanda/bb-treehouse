@@ -162,6 +162,22 @@ describe("commits", () => {
   });
 });
 
+describe("history", () => {
+  it("reports full ref names so local slash branches are not mistaken for remotes", async () => {
+    const root = repo(tempDir());
+    write(path.join(root, "a.txt"), "a\n");
+    commitAll(root, "init");
+    git(root, "branch", "feature/checkout");
+    git(root, "tag", "v1.0.0");
+    const page = await host.log({ root, repo: "", all: true, skip: 0, limit: 10 }, ctx);
+    expect(page.commits[0]?.refs.split(", ").sort()).toEqual([
+      "HEAD -> refs/heads/main",
+      "refs/heads/feature/checkout",
+      "tag: refs/tags/v1.0.0",
+    ]);
+  });
+});
+
 describe("pull request links", () => {
   it.each([
     ["git@github.com:acme/app.git", "https://github.com/acme/app/compare/main...feat/x?expand=1"],

@@ -44,10 +44,21 @@ describe("layoutGraph", () => {
 
 describe("parseRefs", () => {
   it("keeps the checked-out branch and tags and hides remotes that mirror a local branch", () => {
-    expect(parseRefs("HEAD -> main, origin/main, origin/HEAD, tag: v1.0, origin/feature")).toEqual([
+    expect(
+      parseRefs(
+        "HEAD -> refs/heads/main, refs/remotes/origin/main, refs/remotes/origin/HEAD, tag: refs/tags/v1.0, refs/remotes/origin/feature",
+      ),
+    ).toEqual([
       { kind: "head", name: "main" },
       { kind: "tag", name: "v1.0" },
       { kind: "remote", name: "origin/feature" },
+    ]);
+  });
+
+  it("tells local branches with a slash apart from remote branches", () => {
+    expect(parseRefs("refs/heads/feature/checkout, refs/remotes/upstream/release/1.0")).toEqual([
+      { kind: "branch", name: "feature/checkout" },
+      { kind: "remote", name: "upstream/release/1.0" },
     ]);
   });
 });

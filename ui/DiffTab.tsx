@@ -234,8 +234,8 @@ function CommitView({ environmentId, params }: { environmentId: string; params: 
         </div>
         <div className="text-xs text-muted-foreground">
           {detail.files.length} file{detail.files.length === 1 ? "" : "s"} changed{" "}
-          <span className="font-mono text-diff-added">+{add}</span>{" "}
-          <span className="font-mono text-diff-removed">-{del}</span>
+          {add > 0 ? <span className="font-mono text-diff-added">+{add} </span> : null}
+          {del > 0 ? <span className="font-mono text-diff-removed">-{del}</span> : null}
           {detail.truncated ? " · list truncated" : ""}
         </div>
       </div>

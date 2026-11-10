@@ -92,12 +92,18 @@ export function parseRefs(refs: string): Ref[] {
   if (refs.trim() === "") return [];
   const out: Ref[] = [];
   for (const raw of refs.split(", ")) {
-    const part = raw.trim();
-    if (part === "" || part === "HEAD" || part.endsWith("/HEAD")) continue;
-    if (part.startsWith("HEAD -> ")) out.push({ kind: "head", name: part.slice(8) });
-    else if (part.startsWith("tag: ")) out.push({ kind: "tag", name: part.slice(5) });
-    else if (part.includes("/")) out.push({ kind: "remote", name: part });
-    else out.push({ kind: "branch", name: part });
+    let part = raw.trim();
+    let head = false;
+    if (part.startsWith("HEAD -> ")) {
+      head = true;
+      part = part.slice(8);
+    }
+    if (part.startsWith("tag: ")) part = part.slice(5);
+    if (part.startsWith("refs/heads/")) out.push({ kind: head ? "head" : "branch", name: part.slice(11) });
+    else if (part.startsWith("refs/tags/")) out.push({ kind: "tag", name: part.slice(10) });
+    else if (part.startsWith("refs/remotes/") && !part.endsWith("/HEAD")) {
+      out.push({ kind: "remote", name: part.slice(13) });
+    }
   }
   const local = new Set(out.filter((r) => r.kind === "head" || r.kind === "branch").map((r) => r.name));
   return out.filter((r) => !(r.kind === "remote" && local.has(r.name.slice(r.name.indexOf("/") + 1))));
