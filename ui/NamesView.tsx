@@ -5,7 +5,7 @@ import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { VirtualList } from "./VirtualList";
 import { FileIcon } from "./FileIcon";
-import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc } from "./data";
+import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc, useCachedState } from "./data";
 
 const TREE_ROW_HEIGHT = 28;
 const INDENT = 16;
@@ -22,6 +22,8 @@ interface Row {
 }
 
 const treeState = new Map<string, Set<string>>();
+const dirsCache = new Map<string, Map<string, DirEntry[]>>();
+const searchCache = new Map<string, string[] | null>();
 
 function expandedFor(environmentId: string): Set<string> {
   let set = treeState.get(environmentId);
@@ -52,7 +54,9 @@ export function NamesView({
   hideIgnored: boolean;
 }) {
   const navigate = useBbNavigate();
-  const [dirs, setDirs] = useState<Map<string, DirEntry[]>>(() => new Map());
+  const [dirs, setDirs] = useCachedState(dirsCache, environmentId, () => new Map<string, DirEntry[]>());
+  const dirsRef = useRef(dirs);
+  dirsRef.current = dirs;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(expandedFor(environmentId)));
   const [loading, setLoading] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +66,7 @@ export function NamesView({
     (rel: string) => {
       const running = inflight.current.get(rel);
       if (running !== undefined) return running;
-      setLoading((prev) => new Set(prev).add(rel));
+      if (!dirsRef.current.has(rel)) setLoading((prev) => new Set(prev).add(rel));
       const promise = rpc
         .call("listDir", { environmentId, rel })
         .then(
@@ -182,6 +186,7 @@ export function NamesView({
       getKey={(row) => row.path}
       getHeight={treeRowHeight}
       className="px-1 py-1"
+      scrollKey={`files:${environmentId}:${base}`}
       renderRow={(row) => (
         <TreeRow
           row={row}
@@ -268,7 +273,11 @@ function SearchResults({
   badges: BadgeIndex;
   onOpen: (path: string) => void;
 }) {
-  const [paths, setPaths] = useState<string[] | null>(null);
+  const [paths, setPaths] = useCachedState(
+    searchCache,
+    `${environmentId}\u0000${base}\u0000${query.trim()}`,
+    () => null,
+  );
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;

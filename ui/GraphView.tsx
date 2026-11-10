@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { DIFF_TAB_REFERENCE, commitTabTitle, type DiffParams } from "./DiffTab";
 import { FolderPicker, type FolderOption } from "./FolderPicker";
 import { VirtualList } from "./VirtualList";
-import { errorMessage, type Rpc } from "./data";
+import { errorMessage, useCachedState, type Rpc } from "./data";
 import { layoutGraph, parseRefs, relativeTime, type GraphRow, type Ref } from "./graph";
 
 const PAGE = 300;
@@ -16,6 +16,7 @@ const MAX_LANES = 12;
 const LANE_HUES = [255, 25, 145, 300, 75, 195, 340, 110, 230, 50];
 
 const repoChoice = new Map<string, string>();
+const logCache = new Map<string, { commits: Commit[] | null; hasMore: boolean }>();
 const scopeChoice = new Map<string, boolean>();
 
 function laneColor(index: number): string {
@@ -58,8 +59,13 @@ export function GraphView({
   const repo = repos.find((r) => r.repo === choice) ?? repos.find((r) => r.repo === "") ?? repos[0] ?? null;
   const [all, setAllState] = useState(() => scopeChoice.get(environmentId) ?? true);
   const [query, setQuery] = useState("");
-  const [commits, setCommits] = useState<Commit[] | null>(null);
-  const [hasMore, setHasMore] = useState(false);
+  const repoKey = repo?.repo ?? null;
+  const [log, setLog] = useCachedState(logCache, `${environmentId}\u0000${repoKey ?? ""}\u0000${all}`, () => ({
+    commits: null as Commit[] | null,
+    hasMore: false,
+  }));
+  const commits = log.commits;
+  const hasMore = log.hasMore;
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,7 +78,6 @@ export function GraphView({
     setAllState(value);
   };
 
-  const repoKey = repo?.repo ?? null;
   const loadedCount = commits?.length ?? 0;
   useEffect(() => {
     if (repoKey === null) return;
@@ -81,10 +86,13 @@ export function GraphView({
     rpc.call("log", { environmentId, repo: repoKey, all, skip: 0, limit }).then(
       (page) => {
         if (cancelled) return;
-        setCommits((prev) =>
-          prev !== null && JSON.stringify(prev) === JSON.stringify(page.commits) ? prev : page.commits,
+        setLog((prev) =>
+          prev.commits !== null &&
+          prev.hasMore === page.hasMore &&
+          JSON.stringify(prev.commits) === JSON.stringify(page.commits)
+            ? prev
+            : { commits: page.commits, hasMore: page.hasMore },
         );
-        setHasMore(page.hasMore);
         setError(null);
       },
       (cause: unknown) => {
@@ -96,21 +104,13 @@ export function GraphView({
     };
   }, [rpc, environmentId, repoKey, all, signal]);
 
-  useEffect(() => {
-    setCommits(null);
-    setHasMore(false);
-  }, [repoKey, all]);
-
   const loadMore = useCallback(() => {
     if (repoKey === null || commits === null || loadingMore) return;
     setLoadingMore(true);
     rpc
       .call("log", { environmentId, repo: repoKey, all, skip: commits.length, limit: PAGE })
       .then(
-        (page) => {
-          setCommits((prev) => [...(prev ?? []), ...page.commits]);
-          setHasMore(page.hasMore);
-        },
+        (page) => setLog((prev) => ({ commits: [...(prev.commits ?? []), ...page.commits], hasMore: page.hasMore })),
         (cause: unknown) => setError(errorMessage(cause)),
       )
       .finally(() => setLoadingMore(false));
@@ -235,6 +235,7 @@ export function GraphView({
               items={items}
               getKey={(item) => (item.kind === "more" ? "more" : item.commit.sha)}
               getHeight={(item) => (item.kind === "more" ? 44 : ROW)}
+              scrollKey={`graph:${environmentId}:${repoKey ?? ""}:${all}`}
               renderRow={(item) =>
                 item.kind === "more" ? (
                   <div className="flex h-full items-center justify-center">

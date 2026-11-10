@@ -14,7 +14,7 @@ import {
   type FileDiffParams,
 } from "./DiffTab";
 import { BranchPicker } from "./BranchPicker";
-import { badgeClass, badgeOf, errorMessage, type Rpc } from "./data";
+import { badgeClass, badgeOf, errorMessage, useCachedState, type Rpc } from "./data";
 
 type Section = "staged" | "changes";
 type Repo = Extract<RepoStatus["status"], { repo: true }>;
@@ -64,6 +64,8 @@ type CompareState =
 
 const compareOpenByEnv = new Map<string, Map<string, boolean>>();
 const compareBaseByEnv = new Map<string, Map<string, string>>();
+const compareDefaultsCache = new Map<string, Map<string, string | null>>();
+const compareDataCache = new Map<string, Map<string, CompareState>>();
 
 interface Selected {
   repo: string;
@@ -237,8 +239,16 @@ export function GitView({
   const [compareBase, setCompareBase] = useState<Map<string, string>>(
     () => compareBaseByEnv.get(environmentId) ?? new Map(),
   );
-  const [compareDefaults, setCompareDefaults] = useState<Map<string, string | null>>(() => new Map());
-  const [compareData, setCompareData] = useState<Map<string, CompareState>>(() => new Map());
+  const [compareDefaults, setCompareDefaults] = useCachedState(
+    compareDefaultsCache,
+    environmentId,
+    () => new Map<string, string | null>(),
+  );
+  const [compareData, setCompareData] = useCachedState(
+    compareDataCache,
+    environmentId,
+    () => new Map<string, CompareState>(),
+  );
 
   const isCompareOpen = useCallback(
     (repo: string, status: Repo) => compareOpen.get(repo) ?? status.files.length === 0,
@@ -529,6 +539,7 @@ export function GitView({
         getKey={keyOf}
         getHeight={heightOf}
         className="pb-2"
+        scrollKey={`diff:${environmentId}:${group}`}
         renderRow={(item) => {
           const repoBusy = busy.get(item.repo) ?? null;
           switch (item.kind) {

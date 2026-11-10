@@ -1,12 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { z } from "zod";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
-import {
-  experimental_useRpcKeyedQuery,
-  experimental_useTabVisible,
-  useRealtime,
-  useRpc,
-} from "@get-bb/plugin-sdk/app";
+import { experimental_useRpcKeyedQuery, experimental_useTabVisible, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import { CHANGED_CHANNEL, WATCH_RENEW_MS, type Change, type WorkspaceStatus, type rpcContract } from "../contract";
 
 export type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
@@ -28,6 +23,32 @@ const gitStatusContract = defineRpcContract({
 
 const changedPayload = z.object({ environmentId: z.string() });
 const POLL_MS = 5000;
+
+export function useCachedState<T>(
+  cache: Map<string, T>,
+  key: string,
+  fallback: () => T,
+): [T, Dispatch<SetStateAction<T>>] {
+  const fallbackRef = useRef(fallback);
+  fallbackRef.current = fallback;
+  const read = useCallback(() => (cache.has(key) ? (cache.get(key) as T) : fallbackRef.current()), [cache, key]);
+  const [state, setState] = useState<{ key: string; value: T }>(() => ({ key, value: read() }));
+  const value = state.key === key ? state.value : read();
+  const set = useCallback<Dispatch<SetStateAction<T>>>(
+    (action) => {
+      setState((prev) => {
+        const base = prev.key === key ? prev.value : read();
+        const next = typeof action === "function" ? (action as (value: T) => T)(base) : action;
+        cache.set(key, next);
+        return { key, value: next };
+      });
+    },
+    [cache, key, read],
+  );
+  return [value, set];
+}
+
+const workspaceCache = new Map<string, WorkspaceStatus | null>();
 
 export function useWatchLease(rpc: Rpc, environmentId: string): boolean | null {
   const [watching, setWatching] = useState<boolean | null>(null);
@@ -121,7 +142,7 @@ export function useRefreshSignal(environmentId: string, options: { poll?: boolea
 }
 
 export function useWorkspaceStatus(rpc: Rpc, environmentId: string, signal: number) {
-  const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
+  const [workspace, setWorkspace] = useCachedState(workspaceCache, environmentId, () => null);
   const [error, setError] = useState<string | null>(null);
   const [manual, setManual] = useState(0);
   const rescan = useRef(false);

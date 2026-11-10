@@ -10,7 +10,11 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { FileIcon } from "./FileIcon";
-import { errorMessage, useRefreshSignal, useTreehouseRpc, useWatchLease } from "./data";
+import { errorMessage, useCachedState, useRefreshSignal, useTreehouseRpc, useWatchLease } from "./data";
+
+const diffCache = new Map<string, { patch: string; truncated: boolean } | null>();
+const commitCache = new Map<string, CommitDetail | null>();
+const commitCollapsedCache = new Map<string, Set<string> | null>();
 
 export const DIFF_TAB_REFERENCE = { id: "diff", context: { kind: "thread" }, availability: "action" } as const;
 
@@ -77,7 +81,7 @@ function DiffView({ environmentId, params }: { environmentId: string; params: Fi
   const navigate = useBbNavigate();
   const watching = useWatchLease(rpc, environmentId);
   const signal = useRefreshSignal(environmentId, { poll: watching === false });
-  const [result, setResult] = useState<{ patch: string; truncated: boolean } | null>(null);
+  const [result, setResult] = useCachedState(diffCache, `${environmentId}\u0000${JSON.stringify(params)}`, () => null);
   const [error, setError] = useState<string | null>(null);
   const { repo, path } = params;
   const compareBase = params.kind === "compare" ? params.base : null;
@@ -155,12 +159,14 @@ const EXPANDED_BY_DEFAULT = 8;
 
 function CommitView({ environmentId, params }: { environmentId: string; params: CommitParams }) {
   const rpc = useTreehouseRpc();
-  const [detail, setDetail] = useState<CommitDetail | null>(null);
+  const cacheKey = `${environmentId}\u0000${params.repo}\u0000${params.sha}`;
+  const [detail, setDetail] = useCachedState(commitCache, cacheKey, () => null);
   const [error, setError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string> | null>(null);
+  const [collapsed, setCollapsed] = useCachedState(commitCollapsedCache, cacheKey, () => null);
   const { repo, sha } = params;
 
   useEffect(() => {
+    if (detail !== null && collapsed !== null) return;
     let cancelled = false;
     rpc.call("show", { environmentId, repo, sha }).then(
       (next) => {

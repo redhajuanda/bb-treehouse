@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "reac
 
 export const ROW_HEIGHT = 26;
 const OVERSCAN_PX = 400;
+const scrollPositions = new Map<string, number>();
 
 function lastAtOrBefore(offsets: readonly number[], y: number): number {
   let lo = 0;
@@ -20,12 +21,14 @@ export function VirtualList<T>({
   getHeight,
   renderRow,
   className,
+  scrollKey,
 }: {
   items: readonly T[];
   getKey: (item: T) => string;
   getHeight?: (item: T) => number;
   renderRow: (item: T) => ReactNode;
   className?: string;
+  scrollKey?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 600 });
@@ -33,9 +36,14 @@ export function VirtualList<T>({
   useLayoutEffect(() => {
     const el = ref.current;
     if (el === null) return;
+    if (scrollKey !== undefined) {
+      const saved = scrollPositions.get(scrollKey);
+      if (saved !== undefined) el.scrollTop = saved;
+    }
     let frame = 0;
     const update = () => {
       frame = 0;
+      if (scrollKey !== undefined) scrollPositions.set(scrollKey, el.scrollTop);
       setViewport((prev) =>
         prev.top === el.scrollTop && prev.height === el.clientHeight
           ? prev
@@ -54,7 +62,7 @@ export function VirtualList<T>({
       observer.disconnect();
       if (frame !== 0) cancelAnimationFrame(frame);
     };
-  }, []);
+  }, [scrollKey]);
 
   const heightOf = (item: T) => (getHeight === undefined ? ROW_HEIGHT : getHeight(item));
   const offsets = useMemo(() => {
