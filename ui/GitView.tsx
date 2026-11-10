@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { ROW_HEIGHT, VirtualList } from "./VirtualList";
+import { FolderPicker, type FolderOption } from "./FolderPicker";
 import { badgeClass, badgeOf, errorMessage, type Rpc } from "./data";
 
 type Section = "staged" | "changes";
@@ -138,6 +139,28 @@ export function GitView({
       : choice !== null && groups.some((g) => g.key === choice)
         ? choice
         : (groups[0]?.key ?? ALL);
+
+  const folderOptions = useMemo<FolderOption[]>(() => {
+    const total = groups.reduce((sum, g) => sum + g.changes, 0);
+    return [
+      {
+        key: ALL,
+        title: "All repositories",
+        path: "",
+        repos: repos.map((r) => (r.repo === "" ? (workspace?.name ?? "workspace") : r.repo)),
+        changes: total,
+        all: true,
+      },
+      ...groups.map((g) => ({
+        key: g.key,
+        title: g.key === "" ? g.label : g.key.slice(g.key.lastIndexOf("/") + 1),
+        path: g.key === "" ? "workspace root" : g.key,
+        repos: g.members.map((m) => (m === "" ? (workspace?.name ?? "workspace") : m.slice(m.lastIndexOf("/") + 1))),
+        changes: g.changes,
+        all: false,
+      })),
+    ];
+  }, [groups, repos, workspace?.name]);
 
   const setChoice = (value: string) => {
     groupChoice.set(environmentId, value);
@@ -298,29 +321,7 @@ export function GitView({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {groups.length > 1 || repos.length > 1 ? (
-        <div className="flex items-center gap-2 px-3 py-2">
-          <span className="shrink-0 text-xs text-muted-foreground">Folder</span>
-          <div className="relative min-w-0 flex-1">
-            <select
-              value={group}
-              onChange={(event) => setChoice(event.target.value)}
-              aria-label="Folder"
-              className="h-7 w-full cursor-pointer appearance-none truncate rounded-full bg-secondary pl-3 pr-7 text-xs font-medium text-secondary-foreground hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <option value={ALL}>All repositories ({repos.length})</option>
-              {groups.map((g) => (
-                <option key={g.key} value={g.key}>
-                  {g.label} · {g.members.length} repo{g.members.length === 1 ? "" : "s"}
-                  {g.changes > 0 ? ` · ${g.changes} changed` : ""}
-                </option>
-              ))}
-            </select>
-            <Icon
-              name="ChevronDown"
-              className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-          </div>
-        </div>
+        <FolderPicker options={folderOptions} value={group} onChange={setChoice} />
       ) : null}
       {workspace.truncated ? (
         <p className="px-3 pb-1 text-xs text-muted-foreground">Repository scan stopped early; some may be missing.</p>
