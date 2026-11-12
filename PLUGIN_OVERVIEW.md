@@ -3,7 +3,7 @@ Treehouse adds one **Files** tab to every thread's side panel, with three views:
 ## Files
 
 - A file tree with icons for 200+ file types, git badges carried up to each parent folder, a folder picker, and fuzzy **Find files** across nested repositories.
-- Files open in Treehouse's own tabs beside the tree, remembered per workspace. Pin, drag to reorder, reopen closed tabs, or pop one out to a bb tab.
+- The panel is split in two: Treehouse's own tabs on the left, and the file tree, change list or graph on the right. Files, diffs and commits share one set of tabs, remembered per workspace. Pin, drag to reorder, reopen closed tabs, or pop one out to a bb tab.
 - Switch a tab to **Edit** to change the file, with syntax highlighting in bb's code theme and Ctrl/⌘+S to save. A save is refused if the file changed on disk since you opened it; you choose to reload or overwrite.
 - Right-click for New File, New Folder, Copy Path, Duplicate, Download (folders as `.tar.gz`), Open in an external editor or a terminal, Rename, Move to Trash and Delete Permanently.
 - Drag files and folders onto a folder to move them, with Undo.

@@ -9,7 +9,7 @@ A file tree, a multi-repo Git panel and a commit graph for [bb](https://getbb.ap
 [![Release](https://img.shields.io/github/v/release/redhajuanda/bb-treehouse?label=release&color=3b82f6)](https://github.com/redhajuanda/bb-treehouse/releases)
 [![bb plugin](https://img.shields.io/badge/bb-plugin-111827)](https://getbb.app)
 
-![Treehouse: file tree, per-repository diff with ✨ commit messages, branch compare and commit graph](docs/demo.gif)
+![Treehouse beside a thread: files open as tabs and in the editor, the right-click menu, a diff and a commit, all next to the chat](docs/demo.gif)
 
 </div>
 
@@ -38,7 +38,7 @@ Agents don't work in one tidy repo. They spread out across `.worktrees/`, nested
 - Jump between the workspace, any worktree or any nested repo from a searchable folder picker.
 - Fuzzy **Find files** that searches inside nested repos too.
 - Ignored files are judged by the repo that actually owns them, so your worktrees don't show up greyed out. One click hides ignored files entirely.
-- **Files open in Treehouse's own tabs**, on the left, with the tree kept on the right, so the explorer never gets covered. Open as many as you like; they come back after a reload. Pin tabs, drag them to reorder, reopen closed ones, and switch with <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd>/<kbd>→</kbd> (rebindable in bb's keyboard settings). One click pops a file out to a regular bb tab.
+- **Everything opens in Treehouse's own tabs** on the left, with the tree, change list or graph kept on the right, so the list never gets covered. Files, diffs and commits share one tab bar, and they come back after a reload. Pin tabs, drag them to reorder, reopen closed ones, and switch with <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd>/<kbd>→</kbd> (rebindable in bb's keyboard settings). One click pops a file out to a regular bb tab.
 - **Drag and drop** files and folders in the tree to move them, with Undo. Drag a file onto the tabs to open it.
 - **Edit files right in the tab.** Switch a tab from Preview to Edit for a code editor with syntax highlighting in bb's own code theme, search, and <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> to save. If an agent changes the file while you edit, Treehouse tells you instead of overwriting either side.
 - **Right-click anything** for New File, New Folder, Copy Path, Copy Relative Path, Duplicate, Download (folders as `.tar.gz`), Open in an external editor or a terminal, Reveal in File Manager, Rename, and Move to Trash (or Delete Permanently).

@@ -7,7 +7,9 @@ export interface TabsState {
   pinned: string[];
   active: string | null;
   sidebarWidth: number;
-  sidebarHidden: boolean;
+  /** The tabs column (left) or the list column (right) is hidden; never both. */
+  leftHidden: boolean;
+  rightHidden: boolean;
   /** Recently closed tabs, newest last; session only. */
   closed: string[];
 }
@@ -16,7 +18,7 @@ export const MAX_TABS = 30;
 const MAX_CLOSED = 20;
 
 export function emptyTabs(sidebarWidth: number): TabsState {
-  return { tabs: [], pinned: [], active: null, sidebarWidth, sidebarHidden: false, closed: [] };
+  return { tabs: [], pinned: [], active: null, sidebarWidth, leftHidden: false, rightHidden: false, closed: [] };
 }
 
 function pinnedCount(state: TabsState): number {

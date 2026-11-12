@@ -27,9 +27,12 @@ import {
 
 const MIN_SIDEBAR = 160;
 const DEFAULT_SIDEBAR = 300;
+/** Below this panel width only one column shows at a time. */
+const NARROW_WIDTH = 560;
 
 /** Which view the tabs belong to; each keeps its own set. */
-export type TabScope = "files" | "diff" | "graph";
+/** Which tab set; the panel now keeps one shared set, "all". */
+export type TabScope = "all";
 
 const memory = new Map<string, TabsState>();
 const storageKey = (environmentId: string, scope: TabScope) => `treehouse:tabs:${scope}:${environmentId}`;
@@ -54,7 +57,8 @@ function loadState(environmentId: string, scope: TabScope): TabsState {
       active: typeof parsed.active === "string" && tabs.includes(parsed.active) ? parsed.active : (tabs[0] ?? null),
       sidebarWidth:
         typeof parsed.sidebarWidth === "number" ? Math.max(MIN_SIDEBAR, parsed.sidebarWidth) : DEFAULT_SIDEBAR,
-      sidebarHidden: parsed.sidebarHidden === true,
+      leftHidden: parsed.leftHidden === true && parsed.rightHidden !== true,
+      rightHidden: parsed.rightHidden === true,
     };
   } catch {
     return fallback;
@@ -119,9 +123,15 @@ export function useTabs(
       pin: (id: string, pinned: boolean) => update((prev) => setPinned(prev, id, pinned)),
       move: (id: string, index: number) => update((prev) => moveTab(prev, id, index)),
       moved: (from: string, to: string | null) => update((prev) => moveFiles(prev, from, to)),
+      /** Hides or shows one column; hiding one shows the other, so both are never hidden. */
+      setHidden: (side: "left" | "right", hidden: boolean) =>
+        update((prev) =>
+          side === "left"
+            ? { ...prev, leftHidden: hidden, rightHidden: hidden ? false : prev.rightHidden }
+            : { ...prev, rightHidden: hidden, leftHidden: hidden ? false : prev.leftHidden },
+        ),
       setSidebarWidth: (sidebarWidth: number) =>
         update((prev) => ({ ...prev, sidebarWidth: Math.max(MIN_SIDEBAR, Math.round(sidebarWidth)) })),
-      toggleSidebar: () => update((prev) => ({ ...prev, sidebarHidden: !prev.sidebarHidden })),
     };
   }, [update]);
 
@@ -152,14 +162,23 @@ export interface TabInfo {
   dirty?: boolean;
 }
 
+/** What the left column shows while no tab is open. */
+export interface EmptyState {
+  icon: string;
+  title: string;
+  hint: string;
+}
+
 /**
- * Treehouse's own tabs on the left and the view's sidebar (the file tree, or
- * the Diff view's change list) on the right, so the sidebar never gets covered.
+ * The panel's two columns, split top to bottom: Treehouse's shared tabs
+ * (files, diffs, commits) on the left, and the current view's list (file
+ * tree, changes or graph) on the right under `header`.
  */
-export function TabbedLayout({
+export function SplitLayout({
   tabs,
+  header,
   sidebar,
-  sidebarName,
+  empty,
   describe,
   renderTab,
   onPopOut,
@@ -167,8 +186,10 @@ export function TabbedLayout({
   stripActions,
 }: {
   tabs: Tabs;
+  /** The right column's header row (the view switch). */
+  header: ReactNode;
   sidebar: ReactNode;
-  sidebarName: string;
+  empty: EmptyState;
   describe: (id: string) => TabInfo;
   renderTab: (id: string, active: boolean) => ReactNode;
   onPopOut: (id: string) => void;
@@ -212,7 +233,69 @@ export function TabbedLayout({
           },
         };
   const hasTabs = tabs.tabs.length > 0;
-  const showSidebar = !hasTabs || !tabs.sidebarHidden;
+
+  // Below NARROW_WIDTH the two columns would both be cramped, so only one shows
+  // at a time and the same buttons switch between them.
+  const [width, setWidth] = useState(Number.POSITIVE_INFINITY);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el === null) return;
+    const observer = new ResizeObserver(() => setWidth(el.clientWidth));
+    observer.observe(el);
+    setWidth(el.clientWidth);
+    return () => observer.disconnect();
+  }, []);
+  const narrow = width < NARROW_WIDTH;
+  const [narrowPane, setNarrowPane] = useState<"tabs" | "list">(() => (tabs.active === null ? "list" : "tabs"));
+  // Opening or switching to a tab brings the tabs column into view.
+  const lastActive = useRef(tabs.active);
+  useEffect(() => {
+    if (tabs.active === lastActive.current) return;
+    lastActive.current = tabs.active;
+    if (tabs.active === null) {
+      if (narrow) setNarrowPane("list");
+      return;
+    }
+    if (narrow) setNarrowPane("tabs");
+    else if (tabs.leftHidden) tabs.setHidden("left", false);
+  }, [tabs.active, narrow, tabs.leftHidden, tabs.setHidden]);
+  const showLeft = narrow ? narrowPane === "tabs" : !tabs.leftHidden;
+  const showRight = narrow ? narrowPane === "list" : !tabs.rightHidden;
+
+  const tabCount = tabs.tabs.length;
+  // Lives in the right column's header, beside the divider: hides or brings back the tabs.
+  const leftToggle = (
+    <button
+      type="button"
+      title={
+        showLeft
+          ? "Hide the tabs to give the list the full width"
+          : `Show the tabs${tabCount > 0 ? ` (${tabCount} open)` : ""}`
+      }
+      aria-pressed={showLeft}
+      onClick={() => (narrow ? setNarrowPane("tabs") : tabs.setHidden("left", showLeft))}
+      className={cn(iconButton, "relative")}
+    >
+      <Icon name="PanelLeft" className="size-4" />
+      {!showLeft && tabCount > 0 ? (
+        <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[oklch(0.56_0.17_255)] px-0.5 text-[9px] leading-none text-white">
+          {tabCount > 9 ? "9+" : tabCount}
+        </span>
+      ) : null}
+    </button>
+  );
+  // Lives in the left column's header, beside the divider: hides or brings back the list.
+  const rightToggle = (
+    <button
+      type="button"
+      title={showRight ? "Hide the list to give the tabs the full width" : "Show the list"}
+      aria-pressed={showRight}
+      onClick={() => (narrow ? setNarrowPane("list") : tabs.setHidden("right", showRight))}
+      className={cn(iconButton, "my-auto mr-1")}
+    >
+      <Icon name="PanelRight" fallback="PanelLeft" className="size-4" />
+    </button>
+  );
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
     const container = containerRef.current;
@@ -221,7 +304,7 @@ export function TabbedLayout({
     const handle = event.currentTarget;
     handle.setPointerCapture(event.pointerId);
     const right = container.getBoundingClientRect().right;
-    const max = container.clientWidth - 240;
+    const max = container.clientWidth - 200;
     const move = (e: PointerEvent) => tabs.setSidebarWidth(Math.min(max, right - e.clientX));
     const up = () => {
       handle.removeEventListener("pointermove", move);
@@ -235,7 +318,7 @@ export function TabbedLayout({
 
   return (
     <div ref={containerRef} className="flex min-h-0 flex-1">
-      {hasTabs ? (
+      {showLeft ? (
         <div
           {...dropHandlers}
           className={cn(
@@ -244,28 +327,41 @@ export function TabbedLayout({
               "after:pointer-events-none after:absolute after:inset-0 after:z-20 after:bg-ring/10 after:ring-2 after:ring-inset after:ring-ring/60",
           )}
         >
-          <TabStrip
-            tabs={tabs}
-            describe={describe}
-            sidebarName={sidebarName}
-            onPopOut={onPopOut}
-            actions={stripActions !== undefined && tabs.active !== null ? stripActions(tabs.active) : null}
-          />
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            {tabs.tabs.map((id) => (
-              <TabPanel key={id} active={id === tabs.active}>
-                {renderTab(id, id === tabs.active)}
-              </TabPanel>
-            ))}
-          </div>
+          {hasTabs ? (
+            <>
+              <TabStrip
+                tabs={tabs}
+                describe={describe}
+                onPopOut={onPopOut}
+                actions={stripActions !== undefined && tabs.active !== null ? stripActions(tabs.active) : null}
+                trailing={rightToggle}
+              />
+              <div className="relative flex min-h-0 flex-1 flex-col">
+                {tabs.tabs.map((id) => (
+                  <TabPanel key={id} active={id === tabs.active}>
+                    {renderTab(id, id === tabs.active)}
+                  </TabPanel>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex h-9 shrink-0 items-center justify-end border-b border-border">{rightToggle}</div>
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
+                <Icon name={empty.icon} className="size-8 opacity-60" />
+                <p className="text-base font-medium text-foreground">{empty.title}</p>
+                <p className="max-w-64">{empty.hint}</p>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
-      {hasTabs && showSidebar ? (
+      {showLeft && showRight ? (
         <div
           role="separator"
           aria-orientation="vertical"
-          aria-label={`Resize ${sidebarName}`}
-          title={`Drag to resize the ${sidebarName}. Double-click to reset.`}
+          aria-label="Resize the side list"
+          title="Drag to resize. Double-click to reset."
           tabIndex={0}
           onPointerDown={startResize}
           onDoubleClick={() => tabs.setSidebarWidth(DEFAULT_SIDEBAR)}
@@ -280,12 +376,20 @@ export function TabbedLayout({
           <span className="absolute inset-y-0 -right-px w-0.5 transition-colors group-hover:bg-ring/60" />
         </div>
       ) : null}
-      {showSidebar ? (
+      {showRight ? (
         <div
           className="flex min-h-0 min-w-0 flex-col"
-          style={hasTabs ? { flex: `0 0 ${tabs.sidebarWidth}px`, maxWidth: "60%" } : { flex: "1 1 auto" }}
+          style={
+            showLeft
+              ? { flex: `0 0 ${tabs.sidebarWidth}px`, maxWidth: "65%", minWidth: MIN_SIDEBAR }
+              : { flex: "1 1 auto" }
+          }
         >
-          {sidebar}
+          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
+            {leftToggle}
+            {header}
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col">{sidebar}</div>
         </div>
       ) : null}
     </div>
@@ -313,15 +417,15 @@ const iconButton =
 function TabStrip({
   tabs,
   describe,
-  sidebarName,
   onPopOut,
   actions,
+  trailing,
 }: {
   tabs: Tabs;
   describe: (id: string) => TabInfo;
-  sidebarName: string;
   onPopOut: (id: string) => void;
   actions: ReactNode;
+  trailing: ReactNode;
 }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const infos = useMemo(() => withHints(tabs.tabs, describe), [tabs.tabs, describe]);
@@ -409,15 +513,7 @@ function TabStrip({
       <button type="button" title="Close all tabs" onClick={tabs.closeAll} className={cn(iconButton, "my-auto")}>
         <Icon name="X" className="size-3.5" />
       </button>
-      <button
-        type="button"
-        title={tabs.sidebarHidden ? `Show ${sidebarName}` : `Hide ${sidebarName}`}
-        aria-pressed={!tabs.sidebarHidden}
-        onClick={tabs.toggleSidebar}
-        className={cn(iconButton, "my-auto mr-1")}
-      >
-        <Icon name="PanelRight" fallback="PanelLeft" className="size-4" />
-      </button>
+      {trailing}
     </div>
   );
 }
@@ -673,7 +769,7 @@ export function FileModeToggle({ environmentId, path }: { environmentId: string;
     <div
       role="radiogroup"
       aria-label="Show the file as"
-      className="my-auto mr-1 flex rounded-md border border-border p-0.5 text-xs"
+      className="my-auto mr-1 flex gap-0.5 rounded-md border border-border p-0.5"
     >
       {(["preview", "edit"] as const).map((value) => (
         <button
@@ -681,14 +777,15 @@ export function FileModeToggle({ environmentId, path }: { environmentId: string;
           type="button"
           role="radio"
           aria-checked={mode === value}
-          title={value === "preview" ? "Show bb's preview of the file" : "Edit the file (saves with Ctrl/⌘+S)"}
+          aria-label={value === "preview" ? "Preview" : "Edit"}
+          title={value === "preview" ? "Preview: bb's view of the file" : "Edit the file (Ctrl/⌘+S saves)"}
           onClick={() => setMode(environmentId, path, value)}
           className={cn(
-            "rounded px-2 py-0.5",
+            "flex h-5 w-6 items-center justify-center rounded",
             mode === value ? "bg-state-active text-foreground" : "text-muted-foreground hover:text-foreground",
           )}
         >
-          {value === "preview" ? "Preview" : "Edit"}
+          <Icon name={value === "preview" ? "Eye" : "Edit"} className="size-3.5" />
         </button>
       ))}
     </div>
