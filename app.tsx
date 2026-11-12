@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   definePluginApp,
+  experimental_useAppPanel,
+  useBbNavigate,
   type ExperimentalThreadTabProps,
   type PluginNewThreadPanelProps,
 } from "@get-bb/plugin-sdk/app";
@@ -11,7 +13,19 @@ import { GitView } from "./ui/GitView";
 import { GraphView } from "./ui/GraphView";
 import { FolderPicker, type FolderOption } from "./ui/FolderPicker";
 import { NamesView } from "./ui/NamesView";
+import { TOOLTIP_ROOT_ATTRIBUTE, Tooltips } from "./ui/Tooltips";
+import { FileTabBody, TabbedLayout, describeFile, useTabs, type TabInfo } from "./ui/FileTabs";
 import {
+  DIFF_TAB_REFERENCE,
+  DiffView,
+  compareTabTitle,
+  diffParamsSchema,
+  diffTabTitle,
+  type CompareDiffParams,
+  type FileDiffParams,
+} from "./ui/DiffTab";
+import {
+  fileTarget,
   indexBadges,
   useLocation,
   useRefreshSignal,
@@ -24,6 +38,11 @@ type Mode = "files" | "diff" | "graph";
 
 const MODES: readonly Mode[] = ["files", "diff", "graph"];
 const MODE_LABELS: Record<Mode, string> = { files: "Files", diff: "Diff", graph: "Graph" };
+const MODE_TIPS: Record<Mode, string> = {
+  files: "Browse the workspace's files",
+  diff: "Review, stage and commit changes in every repository",
+  graph: "Commit history and branches",
+};
 const MODE_ICONS: Record<Mode, string> = { files: "Folder", diff: "FileDiff", graph: "GitMerge" };
 
 const modes = new Map<string, Mode>();
@@ -167,13 +186,55 @@ function Treehouse({ environmentId }: { environmentId: string }) {
     setBaseChoice(next);
   };
 
+  const navigate = useBbNavigate();
+  const files = useTabs(environmentId, "files");
+  const diffs = useTabs(environmentId, "diff");
+  const panel = experimental_useAppPanel();
+  const openDiff = useCallback(
+    (params: FileDiffParams | CompareDiffParams) => diffs.open(JSON.stringify(params)),
+    [diffs.open],
+  );
+  const renderFileTab = useCallback(
+    (path: string) => <FileTabBody environmentId={environmentId} path={path} />,
+    [environmentId],
+  );
+  const renderDiffTab = useCallback(
+    (id: string) => {
+      const params = parseDiffId(id);
+      if (params === null) return <p className="px-4 py-3 text-sm text-muted-foreground">This diff can't be shown.</p>;
+      return <DiffView environmentId={environmentId} params={params} />;
+    },
+    [environmentId],
+  );
+  const popOutDiff = useCallback(
+    (id: string) => {
+      const params = parseDiffId(id);
+      if (params === null) return;
+      const title = params.kind === "compare" ? compareTabTitle(params) : diffTabTitle(params);
+      panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title });
+    },
+    [panel],
+  );
+  const popOut = useCallback(
+    (rel: string) => {
+      const target = fileTarget(environmentId, rel);
+      if (target === null) return;
+      navigate.experimental_openFilePreview({ target, location: null });
+    },
+    [environmentId, navigate],
+  );
+
   const setQuery = (next: string) => {
     queries.set(environmentId, next);
     setQueryState(next);
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col [&_[role=button]]:cursor-pointer [&_[role=button]:focus]:outline-none [&_[role=button]:focus-visible]:ring-1 [&_[role=button]:focus-visible]:ring-inset [&_[role=button]:focus-visible]:ring-ring [&_[role=option]:focus]:outline-none [&_[role=option]]:cursor-pointer [&_[role=tab]]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_button]:cursor-pointer [&_select]:cursor-pointer">
+    <div
+      {...{ [TOOLTIP_ROOT_ATTRIBUTE]: "" }}
+      className="flex h-full min-h-0 flex-col [&_[role=button]]:cursor-pointer [&_[role=button]:focus]:outline-none [&_[role=button]:focus-visible]:ring-1 [&_[role=button]:focus-visible]:ring-inset [&_[role=button]:focus-visible]:ring-ring [&_[role=option]:focus]:outline-none [&_[role=option]]:cursor-pointer [&_[role=tab]]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_button]:cursor-pointer [&_select]:cursor-pointer"
+    >
+      <Tooltips />
       <div className="flex items-stretch border-b border-border pr-1">
         <div role="tablist" aria-label="Treehouse view" className="relative grid flex-1 grid-cols-3">
           <span
@@ -186,6 +247,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
               key={value}
               type="button"
               role="tab"
+              title={MODE_TIPS[value]}
               aria-selected={mode === value}
               onClick={() => setMode(value)}
               className={cn(
@@ -223,93 +285,132 @@ function Treehouse({ environmentId }: { environmentId: string }) {
         </button>
       </div>
       {mode === "files" ? (
-        <>
-          {fileOptions.length > 1 ? (
-            <FolderPicker
-              options={fileOptions}
-              value={base}
-              onChange={setBase}
-              placeholder="Search folders and repositories"
-            />
-          ) : null}
-          <div className={cn("flex items-center gap-1 px-2 pb-2", fileOptions.length > 1 ? "pt-0" : "pt-2")}>
-            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-input px-2">
-              <Icon name="Search" className="size-4 shrink-0 text-muted-foreground" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") setQuery("");
-                }}
-                placeholder="Find files"
-                aria-label="Find files"
-                className="h-8 min-w-0 flex-1 bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
-              />
-              {query === "" ? null : (
+        <TabbedLayout
+          tabs={files}
+          sidebarName="file tree"
+          describe={describeFile}
+          renderTab={renderFileTab}
+          onPopOut={popOut}
+          sidebar={
+            <>
+              {fileOptions.length > 1 ? (
+                <FolderPicker
+                  options={fileOptions}
+                  value={base}
+                  onChange={setBase}
+                  placeholder="Search folders and repositories"
+                />
+              ) : null}
+              <div className={cn("flex items-center gap-1 px-2 pb-2", fileOptions.length > 1 ? "pt-0" : "pt-2")}>
+                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-input px-2">
+                  <Icon name="Search" className="size-4 shrink-0 text-muted-foreground" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setQuery("");
+                    }}
+                    placeholder="Find files"
+                    aria-label="Find files"
+                    className="h-8 min-w-0 flex-1 bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
+                  />
+                  {query === "" ? null : (
+                    <button
+                      type="button"
+                      title="Clear"
+                      onClick={() => setQuery("")}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <Icon name="CircleX" className="size-3.5" />
+                    </button>
+                  )}
+                </div>
                 <button
                   type="button"
-                  title="Clear"
-                  onClick={() => setQuery("")}
-                  className="text-muted-foreground hover:text-foreground"
+                  title={hideIgnored ? "Show ignored files" : "Hide ignored files"}
+                  aria-pressed={hideIgnored}
+                  onClick={() => setHideIgnored(!hideIgnored)}
+                  className={cn(
+                    "flex size-8 shrink-0 items-center justify-center rounded-md hover:bg-state-hover hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                    hideIgnored ? "bg-state-active text-foreground" : "text-muted-foreground",
+                  )}
                 >
-                  <Icon name="CircleX" className="size-3.5" />
+                  <Icon name={hideIgnored ? "EyeOff" : "Eye"} className="size-4" />
                 </button>
-              )}
-            </div>
-            <button
-              type="button"
-              title={hideIgnored ? "Show ignored files" : "Hide ignored files"}
-              aria-pressed={hideIgnored}
-              onClick={() => setHideIgnored(!hideIgnored)}
-              className={cn(
-                "flex size-8 shrink-0 items-center justify-center rounded-md hover:bg-state-hover hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                hideIgnored ? "bg-state-active text-foreground" : "text-muted-foreground",
-              )}
-            >
-              <Icon name={hideIgnored ? "EyeOff" : "Eye"} className="size-4" />
-            </button>
-            <button
-              type="button"
-              title="Collapse all folders"
-              onClick={() => setCollapse((n) => n + 1)}
-              className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-state-hover hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <Icon name="ChevronsUp" className="size-4" />
-            </button>
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col border-t border-border">
-            <NamesView
-              key={base}
-              base={base}
-              hideIgnored={hideIgnored}
-              rootPath={workspace?.root ?? null}
-              rpc={rpc}
-              environmentId={environmentId}
-              badges={badges}
-              signal={signal}
-              query={query}
-              collapseSignal={collapse}
-            />
-          </div>
-        </>
+                <button
+                  type="button"
+                  title="Collapse all folders"
+                  onClick={() => setCollapse((n) => n + 1)}
+                  className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-state-hover hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <Icon name="ChevronsUp" className="size-4" />
+                </button>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+                <NamesView
+                  key={base}
+                  base={base}
+                  hideIgnored={hideIgnored}
+                  rootPath={workspace?.root ?? null}
+                  rpc={rpc}
+                  environmentId={environmentId}
+                  badges={badges}
+                  signal={signal}
+                  query={query}
+                  collapseSignal={collapse}
+                  onOpenFile={files.open}
+                  selectedPath={files.active}
+                  onEntryMoved={files.moved}
+                />
+              </div>
+            </>
+          }
+        />
       ) : mode === "graph" ? (
         <div className="flex min-h-0 flex-1 flex-col">
           <GraphView rpc={rpc} environmentId={environmentId} workspace={workspace} signal={graphSignal} />
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <GitView
-            rpc={rpc}
-            environmentId={environmentId}
-            workspace={workspace}
-            workspaceError={error}
-            reload={reload}
-            signal={signal}
-          />
-        </div>
+        <TabbedLayout
+          tabs={diffs}
+          sidebarName="changes"
+          describe={describeDiff}
+          renderTab={renderDiffTab}
+          onPopOut={popOutDiff}
+          sidebar={
+            <GitView
+              rpc={rpc}
+              environmentId={environmentId}
+              workspace={workspace}
+              workspaceError={error}
+              reload={reload}
+              signal={signal}
+              onOpenDiff={openDiff}
+              activeDiff={diffs.active}
+            />
+          }
+        />
       )}
     </div>
   );
+}
+
+function parseDiffId(id: string): FileDiffParams | CompareDiffParams | null {
+  try {
+    const parsed = diffParamsSchema.safeParse(JSON.parse(id));
+    return parsed.success && parsed.data.kind !== "commit" ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function describeDiff(id: string): TabInfo {
+  const params = parseDiffId(id);
+  if (params === null) return { label: "diff", path: "diff" };
+  const path = params.repo === "" ? params.path : `${params.repo}/${params.path}`;
+  const label = path.slice(path.lastIndexOf("/") + 1);
+  if (params.kind === "compare") return { label, path, badge: `vs ${params.base}` };
+  return { label, path, badge: params.untracked ? "U" : params.staged ? "staged" : undefined };
 }
 
 const TAB_REFERENCE = { id: "treehouse", context: { kind: "thread" }, availability: "fixed" } as const;

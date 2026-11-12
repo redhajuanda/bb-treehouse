@@ -140,6 +140,8 @@ export function GitView({
   workspaceError,
   reload,
   signal,
+  onOpenDiff,
+  activeDiff = null,
 }: {
   rpc: Rpc;
   environmentId: string;
@@ -147,6 +149,10 @@ export function GitView({
   workspaceError: string | null;
   reload: () => void;
   signal: number;
+  /** Shows a diff in Treehouse's own tabs; without it diffs open as bb tabs. */
+  onOpenDiff?: (params: FileDiffParams | CompareDiffParams) => void;
+  /** The open diff tab's id (its params as JSON), highlighted in the list. */
+  activeDiff?: string | null;
 }) {
   const navigate = useBbNavigate();
   const [busy, setBusy] = useState<Map<string, string>>(() => new Map());
@@ -475,6 +481,7 @@ export function GitView({
       },
       select: (value: Selected) => {
         const params: FileDiffParams = { kind: "file", ...value };
+        if (onOpenDiff !== undefined) return onOpenDiff(params);
         if (panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: diffTabTitle(params) })) return;
         const target = fileTarget(environmentId, joinPath(value.repo, value.path));
         if (target !== null) void navigate.experimental_openFilePreview({ target, location: null });
@@ -512,13 +519,14 @@ export function GitView({
         ),
       openCompare: (repo: string, base: string, path: string) => {
         const params: CompareDiffParams = { kind: "compare", repo, base, path };
+        if (onOpenDiff !== undefined) return onOpenDiff(params);
         if (panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: compareTabTitle(params) })) return;
         setNotices((prev) =>
           new Map(prev).set(repo, { tone: "info", text: "Branch diffs open in a tab once the thread has started." }),
         );
       },
     }),
-    [run, rpc, environmentId, navigate, panel],
+    [run, rpc, environmentId, navigate, panel, onOpenDiff],
   );
 
   if (workspace === null) {
@@ -612,7 +620,18 @@ export function GitView({
                 </p>
               );
             case "compare-file":
-              return <CompareFileRow repo={item.repo} base={item.base} file={item.file} onOpen={actions.openCompare} />;
+              return (
+                <CompareFileRow
+                  repo={item.repo}
+                  base={item.base}
+                  file={item.file}
+                  onOpen={actions.openCompare}
+                  active={
+                    activeDiff ===
+                    JSON.stringify({ kind: "compare", repo: item.repo, base: item.base, path: item.file.path })
+                  }
+                />
+              );
             case "section":
               return (
                 <SectionHeader
@@ -636,6 +655,16 @@ export function GitView({
                   section={item.section}
                   disabled={repoBusy !== null}
                   onSelect={actions.select}
+                  active={
+                    activeDiff ===
+                    JSON.stringify({
+                      kind: "file",
+                      repo: item.repo,
+                      path: item.change.path,
+                      staged: item.section === "staged",
+                      untracked: item.change.x === "?",
+                    })
+                  }
                   onOpen={actions.open}
                   onStage={actions.stage}
                   onUnstage={actions.unstage}
@@ -771,10 +800,20 @@ function SyncButton({
 
 type CommitMode = "commit" | "push" | "amend";
 
-const COMMIT_MODES: ReadonlyArray<{ mode: CommitMode; label: string; icon: string }> = [
-  { mode: "commit", label: "Commit", icon: "Check" },
-  { mode: "push", label: "Commit & Push", icon: "ArrowUp" },
-  { mode: "amend", label: "Amend Last Commit", icon: "Edit" },
+const COMMIT_MODES: ReadonlyArray<{ mode: CommitMode; label: string; icon: string; tip: string }> = [
+  {
+    mode: "commit",
+    label: "Commit",
+    icon: "Check",
+    tip: "Commit staged changes, or everything when nothing is staged",
+  },
+  { mode: "push", label: "Commit & Push", icon: "ArrowUp", tip: "Commit, then push the branch to its remote" },
+  {
+    mode: "amend",
+    label: "Amend Last Commit",
+    icon: "Edit",
+    tip: "Replace the last commit with these changes and this message",
+  },
 ];
 
 function CommitBox({
@@ -914,6 +953,7 @@ function CommitBox({
                 key={entry.mode}
                 type="button"
                 role="menuitem"
+                title={entry.tip}
                 disabled={!canRun(entry.mode)}
                 onClick={() => void commit(entry.mode)}
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-state-hover disabled:opacity-50"
@@ -1098,6 +1138,7 @@ const FileRow = memo(function FileRow({
   section,
   disabled,
   onSelect,
+  active,
   onOpen,
   onStage,
   onUnstage,
@@ -1108,6 +1149,7 @@ const FileRow = memo(function FileRow({
   section: Section;
   disabled: boolean;
   onSelect: (selected: Selected) => void;
+  active: boolean;
   onOpen: (repo: string, path: string) => void;
   onStage: (repo: string, paths: string[]) => void;
   onUnstage: (repo: string, paths: string[]) => void;
@@ -1127,7 +1169,10 @@ const FileRow = memo(function FileRow({
       onKeyDown={(event) => {
         if (event.key === "Enter") select();
       }}
-      className="group relative flex h-full cursor-pointer items-center gap-1.5 pl-11 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
+      className={cn(
+        "group relative flex h-full cursor-pointer items-center gap-1.5 pl-11 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
+        active && "bg-state-active hover:bg-state-active",
+      )}
     >
       <RepoGuide repo={repo} />
       <FileIcon name={name} className={cn(deleted && "opacity-50")} />
@@ -1277,11 +1322,13 @@ const CompareFileRow = memo(function CompareFileRow({
   base,
   file,
   onOpen,
+  active,
 }: {
   repo: string;
   base: string;
   file: CompareFile;
   onOpen: (repo: string, base: string, path: string) => void;
+  active: boolean;
 }) {
   const { name, dir } = splitName(file.path);
   const tone = COMPARE_TONES[file.status];
@@ -1294,7 +1341,10 @@ const CompareFileRow = memo(function CompareFileRow({
       onKeyDown={(event) => {
         if (event.key === "Enter") onOpen(repo, base, file.path);
       }}
-      className="relative flex h-full items-center gap-1.5 pl-11 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
+      className={cn(
+        "relative flex h-full items-center gap-1.5 pl-11 pr-2 text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
+        active && "bg-state-active hover:bg-state-active",
+      )}
     >
       <RepoGuide repo={repo} />
       <FileIcon name={name} className={cn(file.status === "D" && "opacity-50")} />

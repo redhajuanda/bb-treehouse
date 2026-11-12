@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useBbNavigate } from "@get-bb/plugin-sdk/app";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { DirEntry } from "../contract";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { VirtualList } from "./VirtualList";
 import { FileIcon } from "./FileIcon";
-import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc, useCachedState, fileTarget } from "./data";
+import { EntryContextMenu, useEntryActions, type EntryTarget } from "./EntryMenu";
+import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc, useCachedState } from "./data";
 
 const TREE_ROW_HEIGHT = 28;
 const INDENT = 16;
@@ -44,6 +44,9 @@ export function NamesView({
   base,
   hideIgnored,
   rootPath,
+  onOpenFile,
+  selectedPath,
+  onEntryMoved,
 }: {
   rpc: Rpc;
   environmentId: string;
@@ -54,8 +57,10 @@ export function NamesView({
   base: string;
   hideIgnored: boolean;
   rootPath: string | null;
+  onOpenFile: (path: string) => void;
+  selectedPath: string | null;
+  onEntryMoved: (from: string, to: string | null) => void;
 }) {
-  const navigate = useBbNavigate();
   const [dirs, setDirs] = useCachedState(dirsCache, environmentId, () => new Map<string, DirEntry[]>());
   const dirsRef = useRef(dirs);
   dirsRef.current = dirs;
@@ -136,13 +141,49 @@ export function NamesView({
     [load],
   );
 
-  const open = useCallback(
-    (rel: string) => {
-      const target = fileTarget(environmentId, rel);
-      if (target === null) return;
-      navigate.experimental_openFilePreview({ target, location: null });
+  const open = onOpenFile;
+
+  const onChanged = useCallback(
+    ({ parent, path, removed }: { parent: string; path: string | null; removed?: string }) => {
+      void load(parent);
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (removed !== undefined) {
+          for (const rel of prev) if (rel === removed || rel.startsWith(`${removed}/`)) next.delete(rel);
+        }
+        if (parent !== base) next.add(parent);
+        return next;
+      });
+      if (path !== null) setFocusPath(path);
+      if (removed !== undefined) onEntryMoved(removed, path);
     },
-    [navigate, environmentId],
+    [load, base, onEntryMoved],
+  );
+  const [focusPath, setFocusPath] = useState<string | null>(null);
+  const { actions, handleKey, dialogs } = useEntryActions({
+    rpc,
+    environmentId,
+    rootPath,
+    openFile: onOpenFile,
+    onChanged,
+  });
+  const onRowKey = useCallback(
+    (event: KeyboardEvent, target: EntryTarget) => {
+      if (handleKey(event, target)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    [handleKey],
+  );
+  const fallback = useMemo<EntryTarget>(() => ({ path: base, dir: true }), [base]);
+  const withMenu = (content: ReactNode) => (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <EntryContextMenu environmentId={environmentId} actions={actions} fallback={fallback}>
+        {content}
+      </EntryContextMenu>
+      {dialogs}
+    </div>
   );
 
   const rows = useMemo(() => {
@@ -171,8 +212,16 @@ export function NamesView({
   }, [dirs, expanded, loading, base, hideIgnored]);
 
   if (query.trim() !== "") {
-    return (
-      <SearchResults rpc={rpc} environmentId={environmentId} base={base} query={query} badges={badges} onOpen={open} />
+    return withMenu(
+      <SearchResults
+        rpc={rpc}
+        environmentId={environmentId}
+        base={base}
+        query={query}
+        badges={badges}
+        onOpen={open}
+        onKey={onRowKey}
+      />,
     );
   }
   if (error !== null && !dirs.has(base)) {
@@ -183,8 +232,8 @@ export function NamesView({
   }
   if (rows.length === 0) {
     const scratch = rootPath !== null && rootPath.includes("/environment-personal-workspace/");
-    return (
-      <div className="px-4 py-6 text-sm text-muted-foreground">
+    return withMenu(
+      <div className="flex-1 px-4 py-6 text-sm text-muted-foreground">
         <p className="font-medium text-foreground">This folder is empty.</p>
         {rootPath === null ? null : (
           <p className="mt-1 break-all font-mono text-xs" title={rootPath}>
@@ -199,10 +248,11 @@ export function NamesView({
         ) : hideIgnored ? (
           <p className="mt-3">Ignored files are hidden; the eye button shows them.</p>
         ) : null}
-      </div>
+        <p className="mt-3 text-xs">Right-click to create a file or folder.</p>
+      </div>,
     );
   }
-  return (
+  return withMenu(
     <VirtualList
       items={rows}
       getKey={(row) => row.path}
@@ -215,9 +265,13 @@ export function NamesView({
           badge={row.dir ? badges.dirs.get(row.path) : badges.files.get(row.path)}
           onToggle={toggle}
           onOpen={open}
+          onKey={onRowKey}
+          selected={!row.dir && selectedPath === row.path}
+          focus={focusPath === row.path}
+          onFocused={() => setFocusPath(null)}
         />
       )}
-    />
+    />,
   );
 }
 
@@ -226,20 +280,40 @@ const TreeRow = memo(function TreeRow({
   badge,
   onToggle,
   onOpen,
+  onKey,
+  selected,
+  focus,
+  onFocused,
 }: {
   row: Row;
   badge: Badge | undefined;
   onToggle: (path: string) => void;
   onOpen: (path: string) => void;
+  onKey: (event: KeyboardEvent, target: EntryTarget) => void;
+  selected: boolean;
+  focus: boolean;
+  onFocused: () => void;
 }) {
   const tone = badge === undefined ? undefined : badgeClass(badge);
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!focus) return;
+    ref.current?.focus();
+    ref.current?.scrollIntoView({ block: "nearest" });
+    onFocused();
+  }, [focus, onFocused]);
   return (
     <button
+      ref={ref}
       type="button"
       title={row.path}
+      data-entry-path={row.path}
+      data-entry-dir={row.dir}
+      onKeyDown={(event) => onKey(event, { path: row.path, dir: row.dir })}
       onClick={() => (row.dir ? onToggle(row.path) : onOpen(row.path))}
       className={cn(
         "relative flex h-full w-full items-center gap-1.5 rounded-md pr-3 text-left text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
+        selected && "bg-state-active hover:bg-state-active",
         row.ignored && "opacity-55",
       )}
       style={{ paddingLeft: 6 + row.depth * INDENT }}
@@ -287,6 +361,7 @@ function SearchResults({
   query,
   badges,
   onOpen,
+  onKey,
 }: {
   rpc: Rpc;
   environmentId: string;
@@ -294,6 +369,7 @@ function SearchResults({
   query: string;
   badges: BadgeIndex;
   onOpen: (path: string) => void;
+  onKey: (event: KeyboardEvent, target: EntryTarget) => void;
 }) {
   const [paths, setPaths] = useCachedState(
     searchCache,
@@ -339,6 +415,9 @@ function SearchResults({
           <button
             type="button"
             title={p}
+            data-entry-path={p}
+            data-entry-dir={false}
+            onKeyDown={(event) => onKey(event, { path: p, dir: false })}
             onClick={() => onOpen(p)}
             className="flex h-full w-full items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
           >

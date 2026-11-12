@@ -113,6 +113,7 @@ export function FolderPicker({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
+        title={`Choose which of the ${noun} to show`}
         onClick={() => setOpen((o) => !o)}
         className={cn(
           "flex h-10 w-full items-center gap-2.5 rounded-lg border border-transparent bg-secondary px-2.5 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",

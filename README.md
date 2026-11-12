@@ -14,7 +14,7 @@ A file tree, a multi-repo Git panel and a commit graph for [bb](https://getbb.ap
 </div>
 
 ```sh
-bb plugin install git:https://github.com/redhajuanda/bb-treehouse@^0.2.0 --yes
+bb plugin install git:https://github.com/redhajuanda/bb-treehouse@^0.3.0 --yes
 ```
 
 Open any thread's side panel, pick **Files** (or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>), and you're in.
@@ -38,12 +38,14 @@ Agents don't work in one tidy repo. They spread out across `.worktrees/`, nested
 - Jump between the workspace, any worktree or any nested repo from a searchable folder picker.
 - Fuzzy **Find files** that searches inside nested repos too.
 - Ignored files are judged by the repo that actually owns them, so your worktrees don't show up greyed out. One click hides ignored files entirely.
+- **Files open in Treehouse's own tabs**, on the left, with the tree kept on the right, so the explorer never gets covered. Open as many as you like; they come back after a reload. Close, Close Others, Close to the Right and Close All on right-click, and one click pops a file out to a regular bb tab.
+- **Right-click anything** for New File, New Folder, Copy Path, Copy Relative Path, Duplicate, Download (folders as `.tar.gz`), Open in an external editor or a terminal, Reveal in File Manager, Rename and Delete.
 
 ### ± Diff: a Git client built for many repos
 
 - Each repository gets its own **commit box**: ✨ AI message, **Commit**, **Commit & Push** and **Amend Last Commit**.
 - **Staged** and **Changes** lists with one-click stage, unstage and discard, per file or per **hunk**.
-- Diffs open in their own panel tab and update live as files change.
+- Diffs open as tabs on the left with the change list on the right, and update live as files change.
 - **Compare with** any local or remote branch: ahead/behind counts plus every file changed since the branches split, just like a PR view.
 - **Create PR** pushes the branch and opens the pull request or merge request page. Works with GitHub, GitLab (self-hosted too) and Bitbucket, with no CLI login needed.
 - Pull, push, and **Publish** for branches that don't have an upstream yet.
@@ -54,6 +56,8 @@ Agents don't work in one tidy repo. They spread out across `.worktrees/`, nested
 - Branch and tag badges, author initials, short hashes and relative dates.
 - **All branches** or just the current one. Filter by message, author, hash or branch.
 - Click any commit to see its full diff, file by file.
+
+Every button explains itself in a tooltip when you hover it.
 
 ## Fast by design
 

@@ -126,6 +126,16 @@ const compareOutput = z.object({
 });
 export type CompareResult = z.infer<typeof compareOutput>;
 
+export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+export const entryName = z
+  .string()
+  .trim()
+  .min(1, "Enter a name")
+  .max(255)
+  .refine((value) => value !== "." && value !== ".." && !/[\\/\0]/u.test(value), "Names cannot contain / or \\")
+  .refine((value) => value !== ".git", "That name is reserved by git");
+const entryPath = relPath.min(1);
+
 const message = z.string().trim().min(1).max(20000);
 const fileLists = { tracked: z.array(z.string().min(1)), untracked: z.array(z.string().min(1)) };
 
@@ -200,6 +210,21 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
     commit: { input: z.object({ ...repo, message, stageAll: z.boolean(), amend: z.boolean() }), output: ok },
     push: { input: z.object(repo), output: ok },
     pull: { input: z.object(repo), output: ok },
+    createEntry: {
+      input: z.object({ ...base, parent: relPath, name: entryName, dir: z.boolean() }),
+      output: z.object({ path: z.string() }),
+    },
+    renameEntry: {
+      input: z.object({ ...base, path: entryPath, name: entryName }),
+      output: z.object({ path: z.string() }),
+    },
+    duplicateEntry: { input: z.object({ ...base, path: entryPath }), output: z.object({ path: z.string() }) },
+    deleteEntry: { input: z.object({ ...base, path: entryPath }), output: z.object({ path: z.string() }) },
+    readEntry: {
+      input: z.object({ ...base, path: entryPath }),
+      output: z.object({ fileName: z.string(), base64: z.string(), mime: z.string() }),
+    },
+    revealEntry: { input: z.object({ ...base, path: relPath }), output: z.object({ opened: z.boolean() }) },
   });
 }
 

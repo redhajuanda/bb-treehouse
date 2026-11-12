@@ -195,6 +195,7 @@ export function GraphView({
               key={String(entry.value)}
               type="button"
               aria-pressed={all === entry.value}
+              title={entry.value ? "Show commits from every branch" : `Show only commits reachable from ${entry.label}`}
               onClick={() => setAll(entry.value)}
               className={cn(
                 "flex max-w-[140px] items-center gap-1 truncate rounded px-2 py-1",
@@ -250,6 +251,7 @@ export function GraphView({
                       type="button"
                       onClick={loadMore}
                       disabled={loadingMore}
+                      title="Load older commits"
                       className="flex items-center gap-1.5 rounded-md px-3 py-1 text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-50"
                     >
                       <Icon

@@ -1,9 +1,10 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { experimental_defineHostEntry, type ExperimentalHostRpcContext } from "@get-bb/plugin-sdk/host";
 import {
   MAX_DIR_ENTRIES,
+  MAX_DOWNLOAD_BYTES,
   MAX_REPOS,
   MAX_SEARCH_RESULTS,
   MAX_STATUS_FILES,
@@ -942,6 +943,139 @@ function runClaudeCli(cwd: string, prompt: string): Promise<{ available: boolean
   });
 }
 
+function entryTarget(root: string, rel: string): string {
+  const target = inside(root, rel);
+  if (target === path.resolve(root)) throw new Error("This action needs a file or folder inside the workspace.");
+  if (rel.split(/[\\/]/u).includes(".git")) throw new Error("Treehouse does not change files inside .git.");
+  return target;
+}
+
+function toRel(root: string, target: string): string {
+  return path.relative(path.resolve(root), target).split(path.sep).join("/");
+}
+
+async function exists(target: string): Promise<boolean> {
+  return fs.lstat(target).then(
+    () => true,
+    () => false,
+  );
+}
+
+async function createEntry(root: string, parent: string, name: string, dir: boolean) {
+  const parentDir = inside(root, parent);
+  const target = path.join(parentDir, name);
+  entryTarget(root, toRel(root, target));
+  if (await exists(target)) throw new Error(`${name} already exists.`);
+  if (dir) {
+    await fs.mkdir(target);
+  } else {
+    await fs.writeFile(target, "", { flag: "wx" });
+  }
+  return { path: toRel(root, target) };
+}
+
+async function renameEntry(root: string, rel: string, name: string) {
+  const from = entryTarget(root, rel);
+  const to = path.join(path.dirname(from), name);
+  entryTarget(root, toRel(root, to));
+  if (to === from) return { path: rel };
+  const caseOnly = to.toLowerCase() === from.toLowerCase();
+  if (!caseOnly && (await exists(to))) throw new Error(`${name} already exists.`);
+  await fs.rename(from, to);
+  return { path: toRel(root, to) };
+}
+
+export function duplicateName(name: string, dir: boolean, n: number): string {
+  const suffix = n === 1 ? " copy" : ` copy ${n}`;
+  const dot = dir ? -1 : name.lastIndexOf(".");
+  if (dot <= 0) return `${name}${suffix}`;
+  return `${name.slice(0, dot)}${suffix}${name.slice(dot)}`;
+}
+
+async function duplicateEntry(root: string, rel: string) {
+  const from = entryTarget(root, rel);
+  const stat = await fs.stat(from);
+  const name = path.basename(from);
+  for (let n = 1; n < 1000; n += 1) {
+    const to = path.join(path.dirname(from), duplicateName(name, stat.isDirectory(), n));
+    if (await exists(to)) continue;
+    await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
+    return { path: toRel(root, to) };
+  }
+  throw new Error(`Could not find a free name for a copy of ${name}.`);
+}
+
+async function deleteEntry(root: string, rel: string) {
+  const target = entryTarget(root, rel);
+  await fs.rm(target, { recursive: true, force: false });
+  return { path: rel };
+}
+
+const MIME: Record<string, string> = {
+  ".json": "application/json",
+  ".md": "text/markdown",
+  ".txt": "text/plain",
+  ".html": "text/html",
+  ".css": "text/css",
+  ".js": "text/javascript",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".pdf": "application/pdf",
+  ".zip": "application/zip",
+};
+
+const TOO_BIG = `Downloads are limited to ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.`;
+
+async function readEntry(root: string, rel: string) {
+  const target = entryTarget(root, rel);
+  const stat = await fs.stat(target);
+  const name = path.basename(target);
+  if (!stat.isDirectory()) {
+    if (stat.size > MAX_DOWNLOAD_BYTES) throw new Error(TOO_BIG);
+    const bytes = await fs.readFile(target);
+    const mime = MIME[path.extname(name).toLowerCase()] ?? "application/octet-stream";
+    return { fileName: name, base64: bytes.toString("base64"), mime };
+  }
+  const archive = await new Promise<Buffer>((resolve, reject) => {
+    execFile(
+      "tar",
+      ["-czf", "-", "-C", path.dirname(target), "--", name],
+      { encoding: "buffer", maxBuffer: MAX_DOWNLOAD_BYTES, timeout: 120_000 },
+      (error, stdout) => {
+        if (error === null) resolve(stdout);
+        else if ((error as { code?: unknown }).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") reject(new Error(TOO_BIG));
+        else reject(new Error(`Could not archive ${name}: ${error.message}`));
+      },
+    );
+  });
+  return { fileName: `${name}.tar.gz`, base64: archive.toString("base64"), mime: "application/gzip" };
+}
+
+async function revealEntry(root: string, rel: string) {
+  const target = inside(root, rel);
+  const isDir = await fs.stat(target).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+  const [command, args] =
+    process.platform === "darwin"
+      ? ["open", isDir ? [target] : ["-R", target]]
+      : process.platform === "win32"
+        ? ["explorer", isDir ? [target] : [`/select,${target}`]]
+        : ["xdg-open", [isDir ? target : path.dirname(target)]];
+  return new Promise<{ opened: boolean }>((resolve) => {
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.once("error", () => resolve({ opened: false }));
+    child.once("spawn", () => {
+      child.unref();
+      resolve({ opened: true });
+    });
+  });
+}
+
 export default experimental_defineHostEntry({
   contract: hostContract,
   experimental_signals: hostSignals,
@@ -1029,5 +1163,23 @@ export default experimental_defineHostEntry({
       invalidate(root);
       return { output: await gitOk(r, ["pull", "--ff-only"]) };
     },
+    createEntry: ({ root, parent, name, dir }) => {
+      invalidate(root);
+      return createEntry(root, parent, name, dir);
+    },
+    renameEntry: ({ root, path: rel, name }) => {
+      invalidate(root);
+      return renameEntry(root, rel, name);
+    },
+    duplicateEntry: ({ root, path: rel }) => {
+      invalidate(root);
+      return duplicateEntry(root, rel);
+    },
+    deleteEntry: ({ root, path: rel }) => {
+      invalidate(root);
+      return deleteEntry(root, rel);
+    },
+    readEntry: ({ root, path: rel }) => readEntry(root, rel),
+    revealEntry: ({ root, path: rel }) => revealEntry(root, rel),
   },
 });
