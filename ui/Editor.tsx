@@ -238,6 +238,9 @@ const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navig
 export function FileEditor({ environmentId, path, active }: { environmentId: string; path: string; active: boolean }) {
   const rpc = useTreehouseRpc();
   const { theme } = experimental_useCodeTheme();
+  // The editor is built after the file loads, so it reads the newest theme from here.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
   const signal = useRefreshSignal(environmentId, { poll: false });
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -295,7 +298,7 @@ export function FileEditor({ environmentId, path, active }: { environmentId: str
               },
             ]),
             language ?? [],
-            themeCompartment.current.of(themeExtension(theme)),
+            themeCompartment.current.of(themeExtension(themeRef.current)),
             EditorView.updateListener.of((update) => {
               if (!update.docChanged || saved.current === null) return;
               markDirty(!update.state.doc.eq(saved.current.doc));
