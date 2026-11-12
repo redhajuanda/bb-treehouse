@@ -49,6 +49,7 @@ const SHORTCUTS = {
   copyRelative: `${MOD}${ALT}${SHIFT}C`,
   rename: IS_MAC ? "↩" : "F2",
   delete: IS_MAC ? "⌘⌫" : "Delete",
+  deletePermanently: IS_MAC ? "⌥⌘⌫" : "Shift+Delete",
 };
 
 function parentOf(rel: string): string {
@@ -79,7 +80,7 @@ function decodeBase64(base64: string): Uint8Array<ArrayBuffer> {
 type Prompt =
   | { kind: "create"; parent: string; dir: boolean }
   | { kind: "rename"; target: EntryTarget }
-  | { kind: "delete"; target: EntryTarget };
+  | { kind: "delete"; target: EntryTarget; permanent: boolean };
 
 /**
  * Every file action the tree offers: the context menu, row shortcuts and the
@@ -257,8 +258,8 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
   const rename = useCallback((target: EntryTarget) => {
     if (target.path !== "") setPrompt({ kind: "rename", target });
   }, []);
-  const remove = useCallback((target: EntryTarget) => {
-    if (target.path !== "") setPrompt({ kind: "delete", target });
+  const remove = useCallback((target: EntryTarget, permanent = false) => {
+    if (target.path !== "") setPrompt({ kind: "delete", target, permanent });
   }, []);
 
   /** Row shortcuts; returns true when the key was handled. */
@@ -276,7 +277,7 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
         return true;
       }
       if (event.key === "Delete" || (mod && event.key === "Backspace")) {
-        remove(target);
+        remove(target, IS_MAC ? event.altKey : event.shiftKey);
         return true;
       }
       return false;
@@ -314,16 +315,20 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
     [environmentId, onChanged, prompt, rpc, view],
   );
 
-  const confirmDelete = useCallback(async () => {
-    if (prompt?.kind !== "delete") return;
-    await rpc.call("deleteEntry", { environmentId, path: prompt.target.path });
-    setPrompt(null);
-    onChanged({
-      parent: parentOf(prompt.target.path),
-      path: null,
-      removed: prompt.target.path,
-    });
-  }, [environmentId, onChanged, prompt, rpc]);
+  const confirmDelete = useCallback(
+    async (permanent: boolean) => {
+      if (prompt?.kind !== "delete") return;
+      await rpc.call("deleteEntry", { environmentId, path: prompt.target.path, permanent });
+      setPrompt(null);
+      say(permanent ? `Deleted ${baseName(prompt.target.path)}` : `Moved ${baseName(prompt.target.path)} to the trash`);
+      onChanged({
+        parent: parentOf(prompt.target.path),
+        path: null,
+        removed: prompt.target.path,
+      });
+    },
+    [environmentId, onChanged, prompt, rpc, say],
+  );
 
   const dialogs = (
     <>
@@ -334,6 +339,7 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
       />
       <DeleteDialog
         target={prompt?.kind === "delete" ? prompt.target : null}
+        permanent={prompt?.kind === "delete" && prompt.permanent}
         onCancel={() => setPrompt(null)}
         onConfirm={confirmDelete}
       />
@@ -506,7 +512,16 @@ function EntryMenuContent({
           shortcut={SHORTCUTS.delete}
           onSelect={() => actions.remove(target)}
         >
-          Delete
+          Move to Trash
+        </Item>
+        <Item
+          icon="Trash2"
+          destructive
+          disabled={isRoot}
+          shortcut={SHORTCUTS.deletePermanently}
+          onSelect={() => actions.remove(target, true)}
+        >
+          Delete Permanently
         </Item>
       </Menu.Content>
     </Menu.Portal>
@@ -656,12 +671,14 @@ function NameDialog({
 
 function DeleteDialog({
   target,
+  permanent,
   onCancel,
   onConfirm,
 }: {
   target: EntryTarget | null;
+  permanent: boolean;
   onCancel: () => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: (permanent: boolean) => Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -671,17 +688,27 @@ function DeleteDialog({
     setError(null);
     setBusy(false);
   }, [open]);
+  const run = (skipTrash: boolean) => {
+    setBusy(true);
+    onConfirm(skipTrash).catch((cause: unknown) => {
+      const message = errorMessage(cause);
+      setError(skipTrash ? message : `Could not move it to the trash: ${message}`);
+      setBusy(false);
+    });
+  };
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onCancel())}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Delete {target === null ? "" : baseName(target.path)}?</DialogTitle>
+          <DialogTitle>
+            {permanent ? "Delete" : "Move"} {target === null ? "" : baseName(target.path)}
+            {permanent ? " permanently?" : " to the trash?"}
+          </DialogTitle>
           <DialogDescription>
-            {target?.dir
-              ? "The folder and everything inside it will be deleted from disk."
-              : "The file will be deleted from disk."}{" "}
-            This does not use the trash. Changes git has not committed cannot be recovered.
+            {permanent
+              ? `${target?.dir ? "The folder and everything inside it" : "The file"} will be deleted from disk and cannot be restored.`
+              : `You can restore ${target?.dir ? "the folder" : "the file"} from the trash on the workspace machine.`}
           </DialogDescription>
         </DialogHeader>
         {target === null ? null : <p className="break-all font-mono text-xs text-muted-foreground">{target.path}</p>}
@@ -690,20 +717,19 @@ function DeleteDialog({
           <Button type="button" variant="outline" onClick={onCancel}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={busy}
-            autoFocus
-            onClick={() => {
-              setBusy(true);
-              onConfirm().catch((cause: unknown) => {
-                setError(errorMessage(cause));
-                setBusy(false);
-              });
-            }}
-          >
-            Delete
+          {permanent ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => run(true)}
+              className="text-destructive"
+            >
+              Delete Permanently
+            </Button>
+          )}
+          <Button type="button" variant="destructive" disabled={busy} autoFocus onClick={() => run(permanent)}>
+            {permanent ? "Delete Permanently" : "Move to Trash"}
           </Button>
         </DialogFooter>
       </DialogContent>

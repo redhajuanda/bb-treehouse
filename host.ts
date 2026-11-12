@@ -1005,10 +1005,107 @@ async function duplicateEntry(root: string, rel: string) {
   throw new Error(`Could not find a free name for a copy of ${name}.`);
 }
 
-async function deleteEntry(root: string, rel: string) {
+async function deleteEntry(root: string, rel: string, permanent: boolean) {
   const target = entryTarget(root, rel);
-  await fs.rm(target, { recursive: true, force: false });
-  return { path: rel };
+  if (permanent) {
+    await fs.rm(target, { recursive: true, force: false });
+    return { path: rel, trashed: false };
+  }
+  await fs.lstat(target);
+  await moveToTrash(target);
+  return { path: rel, trashed: true };
+}
+
+/** Runs a command; true when it exits 0, false when it is missing or fails. */
+function succeeds(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout: 60_000, env: env ?? process.env }, (error) => resolve(error === null));
+  });
+}
+
+async function uniqueIn(dir: string, name: string): Promise<string> {
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  for (let n = 1; n < 10_000; n += 1) {
+    const candidate = n === 1 ? name : `${stem}.${n}${ext}`;
+    if (!(await exists(path.join(dir, candidate)))) return candidate;
+  }
+  throw new Error(`The trash already holds too many items named ${name}.`);
+}
+
+async function moveAcross(from: string, to: string) {
+  try {
+    await fs.rename(from, to);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
+    await fs.rm(from, { recursive: true, force: true });
+  }
+}
+
+/** Moves a file or folder into a freedesktop.org trash directory, as file managers do. */
+export async function xdgTrash(target: string, trashDir: string): Promise<string> {
+  const filesDir = path.join(trashDir, "files");
+  const infoDir = path.join(trashDir, "info");
+  await fs.mkdir(filesDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(infoDir, { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const name = await uniqueIn(filesDir, path.basename(target));
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const encoded = target.split("/").map(encodeURIComponent).join("/");
+    try {
+      await fs.writeFile(
+        path.join(infoDir, `${name}.trashinfo`),
+        `[Trash Info]\nPath=${encoded}\nDeletionDate=${date}\n`,
+        {
+          flag: "wx",
+        },
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw error;
+    }
+    try {
+      await moveAcross(target, path.join(filesDir, name));
+    } catch (error) {
+      await fs.rm(path.join(infoDir, `${name}.trashinfo`), { force: true });
+      throw error;
+    }
+    return path.join(filesDir, name);
+  }
+  throw new Error("Could not reserve a name in the trash.");
+}
+
+async function moveToTrash(target: string) {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  if (process.platform === "darwin") {
+    if (await succeeds("trash", [target])) return;
+    const script = 'on run argv\ntell application "Finder" to delete (POSIX file (item 1 of argv))\nend run';
+    if (await succeeds("osascript", ["-e", script, target])) return;
+    const trash = path.join(home, ".Trash");
+    await moveAcross(target, path.join(trash, await uniqueIn(trash, path.basename(target))));
+    return;
+  }
+  if (process.platform === "win32") {
+    const command = [
+      "Add-Type -AssemblyName Microsoft.VisualBasic;",
+      "$p = $env:TREEHOUSE_TRASH_PATH;",
+      "if (Test-Path -LiteralPath $p -PathType Container) {",
+      "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, 'OnlyErrorDialogs', 'SendToRecycleBin')",
+      "} else {",
+      "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin')",
+      "}",
+    ].join(" ");
+    const env = { ...process.env, TREEHOUSE_TRASH_PATH: target };
+    if (await succeeds("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], env)) return;
+    throw new Error("Could not move it to the Recycle Bin.");
+  }
+  if (await succeeds("gio", ["trash", "--", target])) return;
+  const dataHome = process.env.XDG_DATA_HOME ?? path.join(home, ".local", "share");
+  await xdgTrash(target, path.join(dataHome, "Trash"));
 }
 
 const MIME: Record<string, string> = {
@@ -1175,9 +1272,9 @@ export default experimental_defineHostEntry({
       invalidate(root);
       return duplicateEntry(root, rel);
     },
-    deleteEntry: ({ root, path: rel }) => {
+    deleteEntry: ({ root, path: rel, permanent }) => {
       invalidate(root);
-      return deleteEntry(root, rel);
+      return deleteEntry(root, rel, permanent);
     },
     readEntry: ({ root, path: rel }) => readEntry(root, rel),
     revealEntry: ({ root, path: rel }) => revealEntry(root, rel),

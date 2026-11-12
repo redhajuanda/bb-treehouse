@@ -16,7 +16,7 @@ const MIN_SIDEBAR = 160;
 const DEFAULT_SIDEBAR = 300;
 
 /** Which view the tabs belong to; each keeps its own set. */
-export type TabScope = "files" | "diff";
+export type TabScope = "files" | "diff" | "graph";
 
 interface TabsState {
   tabs: string[];
@@ -154,6 +154,8 @@ export interface TabInfo {
   label: string;
   path: string;
   badge?: string;
+  /** A bb icon name; file tabs leave it out and get the file type's icon. */
+  icon?: string;
 }
 
 /**
@@ -387,7 +389,11 @@ function Tab({
           )}
         >
           {active ? <span aria-hidden className="absolute inset-x-0 top-0 h-0.5 bg-foreground" /> : null}
-          <FileIcon name={name} className="size-4 shrink-0" />
+          {info.icon === undefined ? (
+            <FileIcon name={name} className="size-4 shrink-0" />
+          ) : (
+            <Icon name={info.icon} fallback="GitMerge" className="size-4 shrink-0 text-muted-foreground" />
+          )}
           <span className="truncate">{info.label}</span>
           {info.hint === "" ? null : <span className="truncate text-xs text-muted-foreground">{info.hint}</span>}
           {info.badge === undefined ? null : (

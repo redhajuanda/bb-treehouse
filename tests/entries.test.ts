@@ -1,8 +1,8 @@
 import path from "node:path";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { duplicateName } from "../host";
+import { duplicateName, xdgTrash } from "../host";
 import { ctx, host, tempDir, write } from "./helpers";
 
 describe("file actions", () => {
@@ -27,10 +27,10 @@ describe("file actions", () => {
     expect(readFileSync(path.join(root, "dir copy/inner.txt"), "utf8")).toBe("x\n");
     write(path.join(root, "taken.md"), "");
     await expect(host.renameEntry({ root, path: "readme.md", name: "taken.md" }, ctx)).rejects.toThrow(/exists/u);
-    await host.deleteEntry({ root, path: "dir copy" }, ctx);
+    await host.deleteEntry({ root, path: "dir copy", permanent: true }, ctx);
     expect(existsSync(path.join(root, "dir copy"))).toBe(false);
-    await expect(host.deleteEntry({ root, path: "" }, ctx)).rejects.toThrow();
-    await expect(host.deleteEntry({ root, path: ".git/config" }, ctx)).rejects.toThrow(/\.git/u);
+    await expect(host.deleteEntry({ root, path: "", permanent: true }, ctx)).rejects.toThrow();
+    await expect(host.deleteEntry({ root, path: ".git/config", permanent: false }, ctx)).rejects.toThrow(/\.git/u);
   });
 
   it("reads files and archives folders for download", async () => {
@@ -50,5 +50,21 @@ describe("file actions", () => {
     expect(duplicateName("a.test.ts", false, 1)).toBe("a.test copy.ts");
     expect(duplicateName(".env", false, 1)).toBe(".env copy");
     expect(duplicateName("v1.2", true, 3)).toBe("v1.2 copy 3");
+  });
+
+  it("moves files into a freedesktop trash with restore info", async () => {
+    const root = tempDir();
+    const trash = path.join(tempDir(), "Trash");
+    write(path.join(root, "notes.md"), "keep me\n");
+    write(path.join(root, "other/notes.md"), "second\n");
+    const first = await xdgTrash(path.join(root, "notes.md"), trash);
+    const second = await xdgTrash(path.join(root, "other/notes.md"), trash);
+    expect(existsSync(path.join(root, "notes.md"))).toBe(false);
+    expect(readFileSync(first, "utf8")).toBe("keep me\n");
+    expect(path.basename(second)).toBe("notes.2.md");
+    expect(readdirSync(path.join(trash, "info")).sort()).toEqual(["notes.2.md.trashinfo", "notes.md.trashinfo"]);
+    const info = readFileSync(path.join(trash, "info", "notes.md.trashinfo"), "utf8");
+    expect(info).toContain(`Path=${path.join(root, "notes.md")}`);
+    expect(info).toMatch(/DeletionDate=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/u);
   });
 });

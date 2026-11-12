@@ -141,6 +141,7 @@ export function GitView({
   reload,
   signal,
   onOpenDiff,
+  onOpenFile,
   activeDiff = null,
 }: {
   rpc: Rpc;
@@ -151,6 +152,8 @@ export function GitView({
   signal: number;
   /** Shows a diff in Treehouse's own tabs; without it diffs open as bb tabs. */
   onOpenDiff?: (params: FileDiffParams | CompareDiffParams) => void;
+  /** Opens a workspace file in Treehouse's Files tabs; without it files open as bb tabs. */
+  onOpenFile?: (path: string) => void;
   /** The open diff tab's id (its params as JSON), highlighted in the list. */
   activeDiff?: string | null;
 }) {
@@ -476,6 +479,7 @@ export function GitView({
         );
       },
       open: (repo: string, path: string) => {
+        if (onOpenFile !== undefined) return onOpenFile(joinPath(repo, path));
         const target = fileTarget(environmentId, joinPath(repo, path));
         if (target !== null) void navigate.experimental_openFilePreview({ target, location: null });
       },
@@ -526,7 +530,7 @@ export function GitView({
         );
       },
     }),
-    [run, rpc, environmentId, navigate, panel, onOpenDiff],
+    [run, rpc, environmentId, navigate, panel, onOpenDiff, onOpenFile],
   );
 
   if (workspace === null) {

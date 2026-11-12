@@ -90,9 +90,12 @@ function DiffTabBody({ environment, params }: ExperimentalThreadActionTabProps) 
 export function DiffView({
   environmentId,
   params,
+  onOpenFile,
 }: {
   environmentId: string;
   params: FileDiffParams | CompareDiffParams;
+  /** Opens the file in Treehouse's Files tabs; without it the file opens as a bb tab. */
+  onOpenFile?: (path: string) => void;
 }) {
   const rpc = useTreehouseRpc();
   const navigate = useBbNavigate();
@@ -145,10 +148,12 @@ export function DiffView({
           type="button"
           title="Open file"
           onClick={() =>
-            navigate.experimental_openFilePreview({
-              target: { kind: "workspace", environmentId, path: full },
-              location: null,
-            })
+            onOpenFile !== undefined
+              ? onOpenFile(full)
+              : navigate.experimental_openFilePreview({
+                  target: { kind: "workspace", environmentId, path: full },
+                  location: null,
+                })
           }
           className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground"
         >
@@ -179,7 +184,7 @@ export function DiffView({
 
 const EXPANDED_BY_DEFAULT = 8;
 
-function CommitView({ environmentId, params }: { environmentId: string; params: CommitParams }) {
+export function CommitView({ environmentId, params }: { environmentId: string; params: CommitParams }) {
   const rpc = useTreehouseRpc();
   const cacheKey = `${environmentId}\u0000${params.repo}\u0000${params.sha}`;
   const [detail, setDetail] = useCachedState(commitCache, cacheKey, () => null);

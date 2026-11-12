@@ -219,7 +219,10 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
       output: z.object({ path: z.string() }),
     },
     duplicateEntry: { input: z.object({ ...base, path: entryPath }), output: z.object({ path: z.string() }) },
-    deleteEntry: { input: z.object({ ...base, path: entryPath }), output: z.object({ path: z.string() }) },
+    deleteEntry: {
+      input: z.object({ ...base, path: entryPath, permanent: z.boolean() }),
+      output: z.object({ path: z.string(), trashed: z.boolean() }),
+    },
     readEntry: {
       input: z.object({ ...base, path: entryPath }),
       output: z.object({ fileName: z.string(), base64: z.string(), mime: z.string() }),

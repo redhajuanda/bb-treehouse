@@ -39,7 +39,7 @@ Agents don't work in one tidy repo. They spread out across `.worktrees/`, nested
 - Fuzzy **Find files** that searches inside nested repos too.
 - Ignored files are judged by the repo that actually owns them, so your worktrees don't show up greyed out. One click hides ignored files entirely.
 - **Files open in Treehouse's own tabs**, on the left, with the tree kept on the right, so the explorer never gets covered. Open as many as you like; they come back after a reload. Close, Close Others, Close to the Right and Close All on right-click, and one click pops a file out to a regular bb tab.
-- **Right-click anything** for New File, New Folder, Copy Path, Copy Relative Path, Duplicate, Download (folders as `.tar.gz`), Open in an external editor or a terminal, Reveal in File Manager, Rename and Delete.
+- **Right-click anything** for New File, New Folder, Copy Path, Copy Relative Path, Duplicate, Download (folders as `.tar.gz`), Open in an external editor or a terminal, Reveal in File Manager, Rename, and Move to Trash (or Delete Permanently).
 
 ### ± Diff: a Git client built for many repos
 
@@ -55,7 +55,7 @@ Agents don't work in one tidy repo. They spread out across `.worktrees/`, nested
 - A Bitbucket-style commit graph with coloured branch lanes and merges.
 - Branch and tag badges, author initials, short hashes and relative dates.
 - **All branches** or just the current one. Filter by message, author, hash or branch.
-- Click any commit to see its full diff, file by file.
+- Click any commit to open its full diff, file by file, as a tab beside the graph.
 
 Every button explains itself in a tooltip when you hover it.
 

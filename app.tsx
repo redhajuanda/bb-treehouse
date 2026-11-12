@@ -17,10 +17,13 @@ import { TOOLTIP_ROOT_ATTRIBUTE, Tooltips } from "./ui/Tooltips";
 import { FileTabBody, TabbedLayout, describeFile, useTabs, type TabInfo } from "./ui/FileTabs";
 import {
   DIFF_TAB_REFERENCE,
+  CommitView,
   DiffView,
+  commitTabTitle,
   compareTabTitle,
   diffParamsSchema,
   diffTabTitle,
+  type CommitParams,
   type CompareDiffParams,
   type FileDiffParams,
 } from "./ui/DiffTab";
@@ -189,7 +192,33 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   const navigate = useBbNavigate();
   const files = useTabs(environmentId, "files");
   const diffs = useTabs(environmentId, "diff");
+  const commits = useTabs(environmentId, "graph");
   const panel = experimental_useAppPanel();
+  const openInFiles = useCallback(
+    (path: string) => {
+      files.open(path);
+      modes.set(environmentId, "files");
+      setModeState("files");
+    },
+    [files.open, environmentId],
+  );
+  const openCommit = useCallback((params: CommitParams) => commits.open(JSON.stringify(params)), [commits.open]);
+  const renderCommitTab = useCallback(
+    (id: string) => {
+      const params = parseCommitId(id);
+      if (params === null)
+        return <p className="px-4 py-3 text-sm text-muted-foreground">This commit can't be shown.</p>;
+      return <CommitView environmentId={environmentId} params={params} />;
+    },
+    [environmentId],
+  );
+  const popOutCommit = useCallback(
+    (id: string) => {
+      const params = parseCommitId(id);
+      if (params !== null) panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: commitTabTitle(params) });
+    },
+    [panel],
+  );
   const openDiff = useCallback(
     (params: FileDiffParams | CompareDiffParams) => diffs.open(JSON.stringify(params)),
     [diffs.open],
@@ -202,9 +231,9 @@ function Treehouse({ environmentId }: { environmentId: string }) {
     (id: string) => {
       const params = parseDiffId(id);
       if (params === null) return <p className="px-4 py-3 text-sm text-muted-foreground">This diff can't be shown.</p>;
-      return <DiffView environmentId={environmentId} params={params} />;
+      return <DiffView environmentId={environmentId} params={params} onOpenFile={openInFiles} />;
     },
-    [environmentId],
+    [environmentId, openInFiles],
   );
   const popOutDiff = useCallback(
     (id: string) => {
@@ -367,9 +396,23 @@ function Treehouse({ environmentId }: { environmentId: string }) {
           }
         />
       ) : mode === "graph" ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <GraphView rpc={rpc} environmentId={environmentId} workspace={workspace} signal={graphSignal} />
-        </div>
+        <TabbedLayout
+          tabs={commits}
+          sidebarName="commit graph"
+          describe={describeCommit}
+          renderTab={renderCommitTab}
+          onPopOut={popOutCommit}
+          sidebar={
+            <GraphView
+              rpc={rpc}
+              environmentId={environmentId}
+              workspace={workspace}
+              signal={graphSignal}
+              onOpenCommit={openCommit}
+              activeCommit={commits.active}
+            />
+          }
+        />
       ) : (
         <TabbedLayout
           tabs={diffs}
@@ -386,6 +429,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
               reload={reload}
               signal={signal}
               onOpenDiff={openDiff}
+              onOpenFile={openInFiles}
               activeDiff={diffs.active}
             />
           }
@@ -393,6 +437,27 @@ function Treehouse({ environmentId }: { environmentId: string }) {
       )}
     </div>
   );
+}
+
+function parseCommitId(id: string): CommitParams | null {
+  try {
+    const parsed = diffParamsSchema.safeParse(JSON.parse(id));
+    return parsed.success && parsed.data.kind === "commit" ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function describeCommit(id: string): TabInfo {
+  const params = parseCommitId(id);
+  if (params === null) return { label: "commit", path: "commit", icon: "GitCommit" };
+  const subject = params.subject.length > 28 ? `${params.subject.slice(0, 27)}…` : params.subject;
+  return {
+    label: subject,
+    path: params.repo === "" ? params.sha : `${params.repo}/${params.sha}`,
+    badge: params.sha.slice(0, 7),
+    icon: "GitCommit",
+  };
 }
 
 function parseDiffId(id: string): FileDiffParams | CompareDiffParams | null {
