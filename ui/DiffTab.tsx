@@ -11,6 +11,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { FileIcon } from "./FileIcon";
+import { TOOLTIP_ROOT_ATTRIBUTE, Tooltips } from "./Tooltips";
 import { errorMessage, useCachedState, useRefreshSignal, useTreehouseRpc, useWatchLease } from "./data";
 
 const diffCache = new Map<string, { patch: string; truncated: boolean } | null>();
@@ -58,7 +59,16 @@ export function commitTabTitle(params: CommitParams): string {
   return `${params.sha.slice(0, 7)} ${subject}`;
 }
 
-export function DiffTab({ environment, params }: ExperimentalThreadActionTabProps) {
+export function DiffTab(props: ExperimentalThreadActionTabProps) {
+  return (
+    <div {...{ [TOOLTIP_ROOT_ATTRIBUTE]: "" }} className="contents">
+      <Tooltips />
+      <DiffTabBody {...props} />
+    </div>
+  );
+}
+
+function DiffTabBody({ environment, params }: ExperimentalThreadActionTabProps) {
   const parsed = diffParamsSchema.safeParse(params);
   if (environment === null) {
     return <p className="px-4 py-3 text-sm text-muted-foreground">This thread has no workspace.</p>;
@@ -77,7 +87,16 @@ export function DiffTab({ environment, params }: ExperimentalThreadActionTabProp
   return <DiffView key={environment.id} environmentId={environment.id} params={value} />;
 }
 
-function DiffView({ environmentId, params }: { environmentId: string; params: FileDiffParams | CompareDiffParams }) {
+export function DiffView({
+  environmentId,
+  params,
+  onOpenFile,
+}: {
+  environmentId: string;
+  params: FileDiffParams | CompareDiffParams;
+  /** Opens the file in Treehouse's Files tabs; without it the file opens as a bb tab. */
+  onOpenFile?: (path: string) => void;
+}) {
   const rpc = useTreehouseRpc();
   const navigate = useBbNavigate();
   const watching = useWatchLease(rpc, environmentId);
@@ -129,10 +148,12 @@ function DiffView({ environmentId, params }: { environmentId: string; params: Fi
           type="button"
           title="Open file"
           onClick={() =>
-            navigate.experimental_openFilePreview({
-              target: { kind: "workspace", environmentId, path: full },
-              location: null,
-            })
+            onOpenFile !== undefined
+              ? onOpenFile(full)
+              : navigate.experimental_openFilePreview({
+                  target: { kind: "workspace", environmentId, path: full },
+                  location: null,
+                })
           }
           className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground"
         >
@@ -163,7 +184,7 @@ function DiffView({ environmentId, params }: { environmentId: string; params: Fi
 
 const EXPANDED_BY_DEFAULT = 8;
 
-function CommitView({ environmentId, params }: { environmentId: string; params: CommitParams }) {
+export function CommitView({ environmentId, params }: { environmentId: string; params: CommitParams }) {
   const rpc = useTreehouseRpc();
   const cacheKey = `${environmentId}\u0000${params.repo}\u0000${params.sha}`;
   const [detail, setDetail] = useCachedState(commitCache, cacheKey, () => null);
@@ -259,6 +280,7 @@ function CommitFileSection({ file, open, onToggle }: { file: CommitFile; open: b
         type="button"
         onClick={onToggle}
         aria-expanded={open}
+        title={open ? "Collapse this file's diff" : "Expand this file's diff"}
         className={cn(
           "sticky top-0 z-10 flex w-full items-center gap-2 bg-background px-3 py-1.5 text-left text-sm hover:bg-state-hover",
           open && "border-b border-border",
@@ -347,6 +369,11 @@ function HunkList({
                   type="button"
                   disabled={pending !== null}
                   onClick={() => (armed === index ? void apply(index, "discard") : setArmed(index))}
+                  title={
+                    armed === index
+                      ? "Click again to throw away this hunk's changes"
+                      : "Throw away this hunk's changes in the working tree"
+                  }
                   className={cn(
                     button,
                     armed === index
@@ -361,6 +388,7 @@ function HunkList({
                   type="button"
                   disabled={pending !== null}
                   onClick={() => void apply(index, "stage")}
+                  title="Stage only this hunk for the next commit"
                   className={cn(button, "text-muted-foreground")}
                 >
                   <Icon
@@ -375,6 +403,7 @@ function HunkList({
                 type="button"
                 disabled={pending !== null}
                 onClick={() => void apply(index, "unstage")}
+                title="Move this hunk back out of the staged changes"
                 className={cn(button, "text-muted-foreground")}
               >
                 <Icon

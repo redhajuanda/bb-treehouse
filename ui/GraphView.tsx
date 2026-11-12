@@ -3,7 +3,7 @@ import { experimental_useAppPanel } from "@get-bb/plugin-sdk/app";
 import type { Commit, WorkspaceStatus } from "../contract";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
-import { DIFF_TAB_REFERENCE, commitTabTitle, type DiffParams } from "./DiffTab";
+import { DIFF_TAB_REFERENCE, commitTabTitle, type CommitParams } from "./DiffTab";
 import { FolderPicker, type FolderOption } from "./FolderPicker";
 import { VirtualList } from "./VirtualList";
 import { errorMessage, useCachedState, type Rpc } from "./data";
@@ -37,6 +37,13 @@ function authorHue(name: string): number {
   return Math.abs(hash) % 360;
 }
 
+/** The id a commit's Treehouse tab uses: its params as JSON. */
+export function commitTabId(repo: string | null, commit: Commit): string | null {
+  if (repo === null) return null;
+  const params: CommitParams = { kind: "commit", repo, sha: commit.sha, subject: commit.subject };
+  return JSON.stringify(params);
+}
+
 type Item = { kind: "commit"; commit: Commit; row: GraphRow | null } | { kind: "more" };
 
 export function GraphView({
@@ -44,11 +51,17 @@ export function GraphView({
   environmentId,
   workspace,
   signal,
+  onOpenCommit,
+  activeCommit = null,
 }: {
   rpc: Rpc;
   environmentId: string;
   workspace: WorkspaceStatus | null;
   signal: number;
+  /** Shows a commit in Treehouse's own tabs; without it commits open as bb tabs. */
+  onOpenCommit?: (params: CommitParams) => void;
+  /** The open commit tab's id (its params as JSON), highlighted in the graph. */
+  activeCommit?: string | null;
 }) {
   const panel = experimental_useAppPanel();
   const repos = useMemo(
@@ -159,12 +172,13 @@ export function GraphView({
   const openCommit = useCallback(
     (commit: Commit) => {
       if (repoKey === null) return;
-      const params: DiffParams = { kind: "commit", repo: repoKey, sha: commit.sha, subject: commit.subject };
+      const params: CommitParams = { kind: "commit", repo: repoKey, sha: commit.sha, subject: commit.subject };
+      if (onOpenCommit !== undefined) return onOpenCommit(params);
       if (!panel.openTab({ tab: DIFF_TAB_REFERENCE, params, title: commitTabTitle(params) })) {
         setError("Commit details open in a tab once the thread has started.");
       }
     },
-    [panel, repoKey],
+    [panel, repoKey, onOpenCommit],
   );
 
   if (workspace === null) {
@@ -195,6 +209,7 @@ export function GraphView({
               key={String(entry.value)}
               type="button"
               aria-pressed={all === entry.value}
+              title={entry.value ? "Show commits from every branch" : `Show only commits reachable from ${entry.label}`}
               onClick={() => setAll(entry.value)}
               className={cn(
                 "flex max-w-[140px] items-center gap-1 truncate rounded px-2 py-1",
@@ -250,6 +265,7 @@ export function GraphView({
                       type="button"
                       onClick={loadMore}
                       disabled={loadingMore}
+                      title="Load older commits"
                       className="flex items-center gap-1.5 rounded-md px-3 py-1 text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-50"
                     >
                       <Icon
@@ -260,7 +276,13 @@ export function GraphView({
                     </button>
                   </div>
                 ) : (
-                  <CommitRow commit={item.commit} row={item.row} lanes={lanes} onOpen={openCommit} />
+                  <CommitRow
+                    commit={item.commit}
+                    row={item.row}
+                    lanes={lanes}
+                    onOpen={openCommit}
+                    active={activeCommit !== null && activeCommit === commitTabId(repoKey, item.commit)}
+                  />
                 )
               }
             />
@@ -276,11 +298,13 @@ const CommitRow = memo(function CommitRow({
   row,
   lanes,
   onOpen,
+  active,
 }: {
   commit: Commit;
   row: GraphRow | null;
   lanes: number;
   onOpen: (commit: Commit) => void;
+  active: boolean;
 }) {
   const refs = useMemo(() => parseRefs(commit.refs), [commit.refs]);
   const merge = commit.parents.length > 1;
@@ -294,7 +318,10 @@ const CommitRow = memo(function CommitRow({
         if (event.key === "Enter") onOpen(commit);
       }}
       title={`${commit.sha}\n${commit.author} <${commit.email}>\n${new Date(commit.time * 1000).toLocaleString()}`}
-      className="flex h-full items-center gap-2 pr-3 hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none"
+      className={cn(
+        "flex h-full items-center gap-2 pr-3 hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
+        active && "bg-state-active hover:bg-state-active",
+      )}
     >
       {lanes > 0 ? <GraphCell row={row} lanes={lanes} merge={merge} /> : <span className="w-2 shrink-0" />}
       <span

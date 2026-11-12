@@ -198,6 +198,36 @@ export default async function plugin(bb: BbPluginApi) {
     pull: mutation(({ hostId, root }, { repo }) =>
       host.call("pull", { root, repo }, { hostId, timeoutMs: NETWORK_TIMEOUT_MS }),
     ),
+    createEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("createEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
+    renameEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("renameEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
+    readText: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("readText", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
+    writeText: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("writeText", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
+    moveEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("moveEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
+    duplicateEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("duplicateEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
+    deleteEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("deleteEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
+    readEntry: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("readEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS });
+    },
+    revealEntry: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("revealEntry", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
   });
 
   const usage = [

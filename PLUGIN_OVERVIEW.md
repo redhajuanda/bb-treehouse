@@ -6,13 +6,16 @@ Treehouse adds one **Files** tab to every thread's side panel, with three views:
 - Git badges for modified, untracked, added and deleted files, carried up to each parent folder.
 - A folder picker that roots the tree at the workspace, any folder holding repositories, or a single repository.
 - Fuzzy **Find files**, including files inside nested repositories.
+- Right-click any file, folder or empty space for **New File**, **New Folder**, **Copy Path**, **Copy Relative Path**, **Duplicate**, **View File**, **Download** (folders as `.tar.gz`, up to 64 MB), **Open in** bb preview, your external editor or a terminal, **Reveal in File Manager** (on the workspace machine), **Rename**, **Move to Trash** and **Delete Permanently**. Rows also take the shortcuts shown in the menu.
+- Files open in Treehouse's own tabs on the left, with the tree on the right, so the tree stays visible. Tabs are remembered per workspace across reloads; pin, drag to reorder, reopen closed tabs, or pop one out to a bb tab. bb commands (rebindable) switch, close and reopen tabs. Drag files and folders in the tree to move them, with Undo. A button hides the tree to give a file the full width.
+- Switch a file tab from Preview to Edit to change the file: syntax highlighting in bb's code theme, search, undo, and Ctrl/⌘+S to save. Saves are refused if the file changed on disk since you opened it, and you choose to reload or overwrite. Tabs with unsaved edits show a dot and ask before closing.
 - Ignore rules come from the repository that owns each folder, so a worktree ignored by the parent repository still shows normally inside. One button hides ignored entries.
 
 ## Diff
 
 - One section per repository with its branch, ahead/behind counts, pull, push, and **Publish** for a branch with no upstream.
 - **Staged** and **Changes** lists: stage, unstage, discard (click twice to confirm) or open each file.
-- A diff tab per file that updates as the file changes, with **Stage hunk**, **Unstage hunk** and **Discard** on each hunk.
+- Diffs open as Treehouse tabs on the left, beside the change list, and update as the file changes, with **Stage hunk**, **Unstage hunk** and **Discard** on each hunk.
 - A commit box per repository: **Commit**, **Commit & Push** and **Amend Last Commit**. **Commit** stages everything when nothing is staged.
 - **✨** writes the commit message with Claude in the style of the repository's recent commits.
 - **Compare with** any local or remote branch: ahead/behind and every file changed since the branches split (`base...HEAD`).
@@ -22,7 +25,9 @@ Treehouse adds one **Files** tab to every thread's side panel, with three views:
 
 - A commit graph per repository with coloured branch lanes, merges, branch and tag badges, author initials and relative dates.
 - All branches or the current branch, a filter by message, author, hash or branch, and 300 more commits per page.
-- Click a commit to open it in a tab with each changed file's diff; merges are shown against their first parent.
+- Click a commit to open it as a tab beside the graph with each changed file's diff; merges are shown against their first parent.
+
+Every button shows a tooltip describing what it does.
 
 ## How it works
 
