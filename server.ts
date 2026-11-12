@@ -204,6 +204,13 @@ export default async function plugin(bb: BbPluginApi) {
     renameEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
       host.call("renameEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),
+    readText: async ({ environmentId, ...input }) => {
+      const { hostId, root } = await resolve(environmentId);
+      return host.call("readText", { root, ...input }, { hostId, timeoutMs: READ_TIMEOUT_MS });
+    },
+    writeText: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("writeText", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
     moveEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
       host.call("moveEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),

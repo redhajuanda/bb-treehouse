@@ -127,6 +127,7 @@ const compareOutput = z.object({
 export type CompareResult = z.infer<typeof compareOutput>;
 
 export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+export const MAX_EDIT_BYTES = 4 * 1024 * 1024;
 export const entryName = z
   .string()
   .trim()
@@ -230,6 +231,27 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
     readEntry: {
       input: z.object({ ...base, path: entryPath }),
       output: z.object({ fileName: z.string(), base64: z.string(), mime: z.string() }),
+    },
+    readText: {
+      input: z.object({ ...base, path: entryPath }),
+      output: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("text"), content: z.string(), hash: z.string() }),
+        z.object({ kind: z.literal("binary") }),
+        z.object({ kind: z.literal("too-large"), size: z.number() }),
+      ]),
+    },
+    writeText: {
+      input: z.object({
+        ...base,
+        path: entryPath,
+        content: z.string().max(MAX_EDIT_BYTES),
+        /** Hash the editor loaded; the write is refused if the file changed since, unless null. */
+        expectedHash: z.string().nullable(),
+      }),
+      output: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("saved"), hash: z.string() }),
+        z.object({ kind: z.literal("conflict"), hash: z.string().nullable() }),
+      ]),
     },
     revealEntry: { input: z.object({ ...base, path: relPath }), output: z.object({ opened: z.boolean() }) },
   });

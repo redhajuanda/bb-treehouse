@@ -40,6 +40,7 @@ Agents don't work in one tidy repo. They spread out across `.worktrees/`, nested
 - Ignored files are judged by the repo that actually owns them, so your worktrees don't show up greyed out. One click hides ignored files entirely.
 - **Files open in Treehouse's own tabs**, on the left, with the tree kept on the right, so the explorer never gets covered. Open as many as you like; they come back after a reload. Pin tabs, drag them to reorder, reopen closed ones, and switch with <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd>/<kbd>→</kbd> (rebindable in bb's keyboard settings). One click pops a file out to a regular bb tab.
 - **Drag and drop** files and folders in the tree to move them, with Undo. Drag a file onto the tabs to open it.
+- **Edit files right in the tab.** Switch a tab from Preview to Edit for a code editor with syntax highlighting in bb's own code theme, search, and <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> to save. If an agent changes the file while you edit, Treehouse tells you instead of overwriting either side.
 - **Right-click anything** for New File, New Folder, Copy Path, Copy Relative Path, Duplicate, Download (folders as `.tar.gz`), Open in an external editor or a terminal, Reveal in File Manager, Rename, and Move to Trash (or Delete Permanently).
 
 ### ± Diff: a Git client built for many repos

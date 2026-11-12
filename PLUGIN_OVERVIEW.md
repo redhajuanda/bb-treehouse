@@ -8,6 +8,7 @@ Treehouse adds one **Files** tab to every thread's side panel, with three views:
 - Fuzzy **Find files**, including files inside nested repositories.
 - Right-click any file, folder or empty space for **New File**, **New Folder**, **Copy Path**, **Copy Relative Path**, **Duplicate**, **View File**, **Download** (folders as `.tar.gz`, up to 64 MB), **Open in** bb preview, your external editor or a terminal, **Reveal in File Manager** (on the workspace machine), **Rename**, **Move to Trash** and **Delete Permanently**. Rows also take the shortcuts shown in the menu.
 - Files open in Treehouse's own tabs on the left, with the tree on the right, so the tree stays visible. Tabs are remembered per workspace across reloads; pin, drag to reorder, reopen closed tabs, or pop one out to a bb tab. bb commands (rebindable) switch, close and reopen tabs. Drag files and folders in the tree to move them, with Undo. A button hides the tree to give a file the full width.
+- Switch a file tab from Preview to Edit to change the file: syntax highlighting in bb's code theme, search, undo, and Ctrl/⌘+S to save. Saves are refused if the file changed on disk since you opened it, and you choose to reload or overwrite. Tabs with unsaved edits show a dot and ask before closing.
 - Ignore rules come from the repository that owns each folder, so a worktree ignored by the parent repository still shows normally inside. One button hides ignored entries.
 
 ## Diff

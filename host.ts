@@ -1,10 +1,12 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { experimental_defineHostEntry, type ExperimentalHostRpcContext } from "@get-bb/plugin-sdk/host";
 import {
   MAX_DIR_ENTRIES,
   MAX_DOWNLOAD_BYTES,
+  MAX_EDIT_BYTES,
   MAX_REPOS,
   MAX_SEARCH_RESULTS,
   MAX_STATUS_FILES,
@@ -985,6 +987,45 @@ async function renameEntry(root: string, rel: string, name: string) {
   return { path: toRel(root, to) };
 }
 
+function hashOf(bytes: Buffer): string {
+  return createHash("sha1").update(bytes).digest("hex");
+}
+
+async function readText(root: string, rel: string) {
+  const target = entryTarget(root, rel);
+  const stat = await fs.stat(target);
+  if (stat.isDirectory()) throw new Error(`${rel} is a folder.`);
+  if (stat.size > MAX_EDIT_BYTES) return { kind: "too-large" as const, size: stat.size };
+  const bytes = await fs.readFile(target);
+  if (bytes.subarray(0, 8000).includes(0)) return { kind: "binary" as const };
+  return { kind: "text" as const, content: bytes.toString("utf8"), hash: hashOf(bytes) };
+}
+
+async function writeText(root: string, rel: string, content: string, expectedHash: string | null) {
+  const target = entryTarget(root, rel);
+  const current = await fs.readFile(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const currentHash = current === null ? null : hashOf(current);
+  if (expectedHash !== null && currentHash !== expectedHash) return { kind: "conflict" as const, hash: currentHash };
+  const bytes = Buffer.from(content, "utf8");
+  // Write beside the file and rename over it so a crash never leaves it half written.
+  const temp = path.join(path.dirname(target), `.${path.basename(target)}.treehouse-${process.pid}-${Date.now()}`);
+  const mode = await fs.stat(target).then(
+    (s) => s.mode,
+    () => undefined,
+  );
+  await fs.writeFile(temp, bytes, mode === undefined ? undefined : { mode });
+  try {
+    await fs.rename(temp, target);
+  } catch (error) {
+    await fs.rm(temp, { force: true });
+    throw error;
+  }
+  return { kind: "saved" as const, hash: hashOf(bytes) };
+}
+
 async function moveEntry(root: string, rel: string, toDirRel: string) {
   const from = entryTarget(root, rel);
   const toDir = inside(root, toDirRel);
@@ -1281,6 +1322,11 @@ export default experimental_defineHostEntry({
     renameEntry: ({ root, path: rel, name }) => {
       invalidate(root);
       return renameEntry(root, rel, name);
+    },
+    readText: ({ root, path: rel }) => readText(root, rel),
+    writeText: ({ root, path: rel, content, expectedHash }) => {
+      invalidate(root);
+      return writeText(root, rel, content, expectedHash);
     },
     moveEntry: ({ root, path: rel, toDir }) => {
       invalidate(root);

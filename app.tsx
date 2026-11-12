@@ -14,7 +14,9 @@ import { GraphView } from "./ui/GraphView";
 import { FolderPicker, type FolderOption } from "./ui/FolderPicker";
 import { NamesView } from "./ui/NamesView";
 import { TOOLTIP_ROOT_ATTRIBUTE, Tooltips } from "./ui/Tooltips";
+import { isDirty, useEditorStore } from "./ui/editorStore";
 import {
+  FileModeToggle,
   FileTabBody,
   TAB_SHORTCUTS,
   TabbedLayout,
@@ -198,7 +200,27 @@ function Treehouse({ environmentId }: { environmentId: string }) {
   };
 
   const navigate = useBbNavigate();
-  const files = useTabs(environmentId, "files");
+  const confirmCloseFiles = useCallback(
+    (ids: string[]) => {
+      const unsaved = ids.filter((id) => isDirty(environmentId, id));
+      if (unsaved.length === 0) return true;
+      const what = unsaved.length === 1 ? baseName(unsaved[0] ?? "") : `${unsaved.length} files`;
+      return window.confirm(`${what} has unsaved changes. Close anyway and lose them?`);
+    },
+    [environmentId],
+  );
+  const files = useTabs(environmentId, "files", confirmCloseFiles);
+  const editorVersion = useEditorStore();
+  const describeFileTab = useCallback(
+    (path: string): TabInfo => ({ ...describeFile(path), dirty: isDirty(environmentId, path) }),
+    // editorVersion re-creates this when a file's unsaved state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [environmentId, editorVersion],
+  );
+  const fileStripActions = useCallback(
+    (path: string) => <FileModeToggle environmentId={environmentId} path={path} />,
+    [environmentId],
+  );
   const diffs = useTabs(environmentId, "diff");
   const commits = useTabs(environmentId, "graph");
   const panel = experimental_useAppPanel();
@@ -232,7 +254,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
     [diffs.open],
   );
   const renderFileTab = useCallback(
-    (path: string) => <FileTabBody environmentId={environmentId} path={path} />,
+    (path: string, active: boolean) => <FileTabBody environmentId={environmentId} path={path} active={active} />,
     [environmentId],
   );
   const renderDiffTab = useCallback(
@@ -325,7 +347,8 @@ function Treehouse({ environmentId }: { environmentId: string }) {
         <TabbedLayout
           tabs={files}
           sidebarName="file tree"
-          describe={describeFile}
+          describe={describeFileTab}
+          stripActions={fileStripActions}
           renderTab={renderFileTab}
           onPopOut={popOut}
           onPathDrop={files.open}

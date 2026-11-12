@@ -10,6 +10,8 @@ import { usePortalScopeProps } from "@/lib/portal-scope";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import { fileTarget } from "./data";
+import { FileEditor } from "./Editor";
+import { forget, modeOf, setMode, useEditorStore } from "./editorStore";
 import {
   MAX_TABS,
   closeTabs,
@@ -74,8 +76,17 @@ function saveState(environmentId: string, scope: TabScope, state: TabsState) {
  * The tabs Treehouse keeps open for one workspace and view, remembered across
  * reloads. A tab is an opaque id: a file path in Files, encoded params in Diff and Graph.
  */
-export function useTabs(environmentId: string, scope: TabScope) {
+export function useTabs(
+  environmentId: string,
+  scope: TabScope,
+  /** Asked before tabs close; return false to keep them (for example, unsaved edits). */
+  confirmClose?: (ids: string[]) => boolean,
+) {
   const [state, setState] = useState<TabsState>(() => loadState(environmentId, scope));
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const confirmRef = useRef(confirmClose);
+  confirmRef.current = confirmClose;
   const update = useCallback(
     (change: (prev: TabsState) => TabsState) => {
       setState((prev) => {
@@ -87,14 +98,21 @@ export function useTabs(environmentId: string, scope: TabScope) {
     [environmentId, scope],
   );
 
-  const actions = useMemo(
-    () => ({
+  const actions = useMemo(() => {
+    const close = (pick: (id: string, index: number, state: TabsState) => boolean, keepPinned: boolean) => {
+      const current = stateRef.current;
+      const ids = current.tabs.filter((t, i) => pick(t, i, current) && !(keepPinned && current.pinned.includes(t)));
+      if (ids.length === 0) return;
+      if (confirmRef.current !== undefined && !confirmRef.current(ids)) return;
+      update((prev) => closeTabs(prev, (t) => ids.includes(t), false));
+    };
+    return {
       open: (id: string) => update((prev) => openTab(prev, id)),
-      close: (id: string) => update((prev) => closeTabs(prev, (t) => t === id, false)),
-      closeActive: () => update((prev) => closeTabs(prev, (t) => t === prev.active, false)),
-      closeOthers: (id: string) => update((prev) => closeTabs(prev, (t) => t !== id, true)),
-      closeRight: (id: string) => update((prev) => closeTabs(prev, (_, i) => i > prev.tabs.indexOf(id), true)),
-      closeAll: () => update((prev) => closeTabs(prev, () => true, true)),
+      close: (id: string) => close((t) => t === id, false),
+      closeActive: () => close((t, _, current) => t === current.active, false),
+      closeOthers: (id: string) => close((t) => t !== id, true),
+      closeRight: (id: string) => close((_, i, current) => i > current.tabs.indexOf(id), true),
+      closeAll: () => close(() => true, true),
       reopen: () => update(reopenTab),
       next: () => update((prev) => cycleTab(prev, 1)),
       previous: () => update((prev) => cycleTab(prev, -1)),
@@ -104,9 +122,8 @@ export function useTabs(environmentId: string, scope: TabScope) {
       setSidebarWidth: (sidebarWidth: number) =>
         update((prev) => ({ ...prev, sidebarWidth: Math.max(MIN_SIDEBAR, Math.round(sidebarWidth)) })),
       toggleSidebar: () => update((prev) => ({ ...prev, sidebarHidden: !prev.sidebarHidden })),
-    }),
-    [update],
-  );
+    };
+  }, [update]);
 
   return { ...state, ...actions };
 }
@@ -131,6 +148,8 @@ export interface TabInfo {
   badge?: string;
   /** A bb icon name; file tabs leave it out and get the file type's icon. */
   icon?: string;
+  /** Unsaved edits: the close button shows a dot until hovered. */
+  dirty?: boolean;
 }
 
 /**
@@ -145,15 +164,18 @@ export function TabbedLayout({
   renderTab,
   onPopOut,
   onPathDrop,
+  stripActions,
 }: {
   tabs: Tabs;
   sidebar: ReactNode;
   sidebarName: string;
   describe: (id: string) => TabInfo;
-  renderTab: (id: string) => ReactNode;
+  renderTab: (id: string, active: boolean) => ReactNode;
   onPopOut: (id: string) => void;
   /** Accepts files dragged from the tree onto the tab area. */
   onPathDrop?: (path: string) => void;
+  /** Controls for the active tab, shown at the end of the tab bar. */
+  stripActions?: (id: string) => ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
@@ -222,11 +244,17 @@ export function TabbedLayout({
               "after:pointer-events-none after:absolute after:inset-0 after:z-20 after:bg-ring/10 after:ring-2 after:ring-inset after:ring-ring/60",
           )}
         >
-          <TabStrip tabs={tabs} describe={describe} sidebarName={sidebarName} onPopOut={onPopOut} />
+          <TabStrip
+            tabs={tabs}
+            describe={describe}
+            sidebarName={sidebarName}
+            onPopOut={onPopOut}
+            actions={stripActions !== undefined && tabs.active !== null ? stripActions(tabs.active) : null}
+          />
           <div className="relative flex min-h-0 flex-1 flex-col">
             {tabs.tabs.map((id) => (
               <TabPanel key={id} active={id === tabs.active}>
-                {renderTab(id)}
+                {renderTab(id, id === tabs.active)}
               </TabPanel>
             ))}
           </div>
@@ -287,11 +315,13 @@ function TabStrip({
   describe,
   sidebarName,
   onPopOut,
+  actions,
 }: {
   tabs: Tabs;
   describe: (id: string) => TabInfo;
   sidebarName: string;
   onPopOut: (id: string) => void;
+  actions: ReactNode;
 }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const infos = useMemo(() => withHints(tabs.tabs, describe), [tabs.tabs, describe]);
@@ -365,6 +395,7 @@ function TabStrip({
           />
         ))}
       </div>
+      {actions}
       {tabs.active === null ? null : (
         <button
           type="button"
@@ -443,7 +474,9 @@ function Tab({
           aria-selected={active}
           aria-label={info.label}
           tabIndex={active ? 0 : -1}
-          title={info.badge === undefined ? info.path : `${info.path} · ${info.badge}`}
+          title={[info.path, info.badge, info.dirty === true ? "unsaved changes" : undefined]
+            .filter(Boolean)
+            .join(" · ")}
           data-tab-id={id}
           draggable
           onDragStart={onDragStart}
@@ -518,11 +551,18 @@ function Tab({
                 tabs.close(id);
               }}
               className={cn(
-                "flex size-5 shrink-0 items-center justify-center rounded hover:bg-state-hover",
-                active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                "group/close flex size-5 shrink-0 items-center justify-center rounded hover:bg-state-hover",
+                active || info.dirty === true ? "opacity-100" : "opacity-0 group-hover:opacity-100",
               )}
             >
-              <Icon name="X" className="size-3" />
+              {info.dirty === true ? (
+                <>
+                  <span aria-hidden className="size-2 rounded-full bg-foreground/70 group-hover/close:hidden" />
+                  <Icon name="X" className="hidden size-3 group-hover/close:block" />
+                </>
+              ) : (
+                <Icon name="X" className="size-3" />
+              )}
             </button>
           )}
         </div>
@@ -595,12 +635,64 @@ function TabPanel({ active, children }: { active: boolean; children: ReactNode }
   );
 }
 
-/** A file tab's body: bb's own file preview. */
-export function FileTabBody({ environmentId, path }: { environmentId: string; path: string }) {
+/** A file tab's body: bb's preview, or Treehouse's editor (see {@link FileModeToggle}). */
+export function FileTabBody({ environmentId, path, active }: { environmentId: string; path: string; active: boolean }) {
+  useEditorStore();
+  const mode = modeOf(environmentId, path);
+  const [editorOpened, setEditorOpened] = useState(mode === "edit");
+  useEffect(() => {
+    if (mode === "edit") setEditorOpened(true);
+  }, [mode]);
+  useEffect(() => () => forget(environmentId, path), [environmentId, path]);
   const target = fileTarget(environmentId, path);
   const name = path.slice(path.lastIndexOf("/") + 1);
-  if (target === null) return <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>;
-  return <FilePreview target={target} renderPreview={(file) => renderBody(name, file)} />;
+  // Both stay mounted once used, so switching keeps the editor's undo history and scroll.
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className={cn("absolute inset-0 flex flex-col", mode === "edit" && "pointer-events-none invisible")}>
+        {target === null ? (
+          <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <FilePreview target={target} renderPreview={(file) => renderBody(name, file)} />
+        )}
+      </div>
+      {editorOpened ? (
+        <div className={cn("absolute inset-0 flex flex-col", mode !== "edit" && "pointer-events-none invisible")}>
+          <FileEditor environmentId={environmentId} path={path} active={active && mode === "edit"} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Preview / Edit switch for the active file tab, shown in the tab bar. */
+export function FileModeToggle({ environmentId, path }: { environmentId: string; path: string }) {
+  useEditorStore();
+  const mode = modeOf(environmentId, path);
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Show the file as"
+      className="my-auto mr-1 flex rounded-md border border-border p-0.5 text-xs"
+    >
+      {(["preview", "edit"] as const).map((value) => (
+        <button
+          key={value}
+          type="button"
+          role="radio"
+          aria-checked={mode === value}
+          title={value === "preview" ? "Show bb's preview of the file" : "Edit the file (saves with Ctrl/⌘+S)"}
+          onClick={() => setMode(environmentId, path, value)}
+          className={cn(
+            "rounded px-2 py-0.5",
+            mode === value ? "bg-state-active text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {value === "preview" ? "Preview" : "Edit"}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function describeFile(path: string): TabInfo {

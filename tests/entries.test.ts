@@ -79,4 +79,23 @@ describe("file actions", () => {
     expect(await host.moveEntry({ root, path: "a", toDir: "b" }, ctx)).toEqual({ path: "b/a" });
     await expect(host.moveEntry({ root, path: "b", toDir: "b/a" }, ctx)).rejects.toThrow(/into itself/u);
   });
+
+  it("reads and writes text, refusing to overwrite a file that changed since it was read", async () => {
+    const root = tempDir();
+    write(path.join(root, "a.txt"), "one\n");
+    const read = await host.readText({ root, path: "a.txt" }, ctx);
+    if (read.kind !== "text") throw new Error("expected text");
+    expect(read.content).toBe("one\n");
+    const saved = await host.writeText({ root, path: "a.txt", content: "two\n", expectedHash: read.hash }, ctx);
+    expect(saved.kind).toBe("saved");
+    expect(readFileSync(path.join(root, "a.txt"), "utf8")).toBe("two\n");
+    const stale = await host.writeText({ root, path: "a.txt", content: "three\n", expectedHash: read.hash }, ctx);
+    expect(stale.kind).toBe("conflict");
+    expect(readFileSync(path.join(root, "a.txt"), "utf8")).toBe("two\n");
+    await host.writeText({ root, path: "a.txt", content: "forced\n", expectedHash: null }, ctx);
+    expect(readFileSync(path.join(root, "a.txt"), "utf8")).toBe("forced\n");
+    expect(readdirSync(root)).toEqual(["a.txt"]);
+    write(path.join(root, "bin.dat"), "a\u0000b");
+    expect((await host.readText({ root, path: "bin.dat" }, ctx)).kind).toBe("binary");
+  });
 });
