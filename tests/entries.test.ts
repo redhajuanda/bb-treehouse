@@ -67,4 +67,16 @@ describe("file actions", () => {
     expect(info).toContain(`Path=${path.join(root, "notes.md")}`);
     expect(info).toMatch(/DeletionDate=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/u);
   });
+
+  it("moves files and folders between folders", async () => {
+    const root = tempDir();
+    write(path.join(root, "a/one.txt"), "1\n");
+    write(path.join(root, "b/keep.txt"), "k\n");
+    write(path.join(root, "b/one.txt"), "taken\n");
+    expect(await host.moveEntry({ root, path: "a/one.txt", toDir: "" }, ctx)).toEqual({ path: "one.txt" });
+    expect(readFileSync(path.join(root, "one.txt"), "utf8")).toBe("1\n");
+    await expect(host.moveEntry({ root, path: "one.txt", toDir: "b" }, ctx)).rejects.toThrow(/already has/u);
+    expect(await host.moveEntry({ root, path: "a", toDir: "b" }, ctx)).toEqual({ path: "b/a" });
+    await expect(host.moveEntry({ root, path: "b", toDir: "b/a" }, ctx)).rejects.toThrow(/into itself/u);
+  });
 });

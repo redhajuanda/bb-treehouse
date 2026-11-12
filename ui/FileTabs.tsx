@@ -10,20 +10,24 @@ import { usePortalScopeProps } from "@/lib/portal-scope";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import { fileTarget } from "./data";
+import {
+  MAX_TABS,
+  closeTabs,
+  cycleTab,
+  emptyTabs,
+  moveFiles,
+  moveTab,
+  openTab,
+  reopenTab,
+  setPinned,
+  type TabsState,
+} from "./tabState";
 
-const MAX_TABS = 30;
 const MIN_SIDEBAR = 160;
 const DEFAULT_SIDEBAR = 300;
 
 /** Which view the tabs belong to; each keeps its own set. */
 export type TabScope = "files" | "diff" | "graph";
-
-interface TabsState {
-  tabs: string[];
-  active: string | null;
-  sidebarWidth: number;
-  sidebarHidden: boolean;
-}
 
 const memory = new Map<string, TabsState>();
 const storageKey = (environmentId: string, scope: TabScope) => `treehouse:tabs:${scope}:${environmentId}`;
@@ -32,14 +36,19 @@ function loadState(environmentId: string, scope: TabScope): TabsState {
   const key = storageKey(environmentId, scope);
   const cached = memory.get(key);
   if (cached !== undefined) return cached;
-  const fallback: TabsState = { tabs: [], active: null, sidebarWidth: DEFAULT_SIDEBAR, sidebarHidden: false };
+  const fallback = emptyTabs(DEFAULT_SIDEBAR);
   try {
     const raw = localStorage.getItem(key);
     if (raw === null) return fallback;
     const parsed = JSON.parse(raw) as Partial<TabsState>;
-    const tabs = Array.isArray(parsed.tabs) ? parsed.tabs.filter((t): t is string => typeof t === "string") : [];
+    const strings = (value: unknown) =>
+      Array.isArray(value) ? value.filter((t): t is string => typeof t === "string") : [];
+    const tabs = strings(parsed.tabs).slice(0, MAX_TABS);
+    const pinned = strings(parsed.pinned).filter((t) => tabs.includes(t));
     return {
-      tabs: tabs.slice(0, MAX_TABS),
+      ...fallback,
+      tabs: [...pinned, ...tabs.filter((t) => !pinned.includes(t))],
+      pinned,
       active: typeof parsed.active === "string" && tabs.includes(parsed.active) ? parsed.active : (tabs[0] ?? null),
       sidebarWidth:
         typeof parsed.sidebarWidth === "number" ? Math.max(MIN_SIDEBAR, parsed.sidebarWidth) : DEFAULT_SIDEBAR,
@@ -54,19 +63,16 @@ function saveState(environmentId: string, scope: TabScope, state: TabsState) {
   const key = storageKey(environmentId, scope);
   memory.set(key, state);
   try {
-    localStorage.setItem(key, JSON.stringify(state));
+    const { closed: _closed, ...persisted } = state;
+    localStorage.setItem(key, JSON.stringify(persisted));
   } catch {
     // Storage full or disabled: tabs still live for this session.
   }
 }
 
-function under(path: string, prefix: string): boolean {
-  return path === prefix || path.startsWith(`${prefix}/`);
-}
-
 /**
  * The tabs Treehouse keeps open for one workspace and view, remembered across
- * reloads. A tab is an opaque id: a file path in Files, encoded diff params in Diff.
+ * reloads. A tab is an opaque id: a file path in Files, encoded params in Diff and Graph.
  */
 export function useTabs(environmentId: string, scope: TabScope) {
   const [state, setState] = useState<TabsState>(() => loadState(environmentId, scope));
@@ -81,73 +87,42 @@ export function useTabs(environmentId: string, scope: TabScope) {
     [environmentId, scope],
   );
 
-  const open = useCallback(
-    (id: string) =>
-      update((prev) => {
-        if (prev.tabs.includes(id)) return prev.active === id ? prev : { ...prev, active: id };
-        const at = prev.active === null ? prev.tabs.length : prev.tabs.indexOf(prev.active) + 1;
-        let tabs = [...prev.tabs.slice(0, at), id, ...prev.tabs.slice(at)];
-        if (tabs.length > MAX_TABS) {
-          const drop = tabs.find((t) => t !== id);
-          tabs = tabs.filter((t) => t !== drop);
-        }
-        return { ...prev, tabs, active: id };
-      }),
+  const actions = useMemo(
+    () => ({
+      open: (id: string) => update((prev) => openTab(prev, id)),
+      close: (id: string) => update((prev) => closeTabs(prev, (t) => t === id, false)),
+      closeActive: () => update((prev) => closeTabs(prev, (t) => t === prev.active, false)),
+      closeOthers: (id: string) => update((prev) => closeTabs(prev, (t) => t !== id, true)),
+      closeRight: (id: string) => update((prev) => closeTabs(prev, (_, i) => i > prev.tabs.indexOf(id), true)),
+      closeAll: () => update((prev) => closeTabs(prev, () => true, true)),
+      reopen: () => update(reopenTab),
+      next: () => update((prev) => cycleTab(prev, 1)),
+      previous: () => update((prev) => cycleTab(prev, -1)),
+      pin: (id: string, pinned: boolean) => update((prev) => setPinned(prev, id, pinned)),
+      move: (id: string, index: number) => update((prev) => moveTab(prev, id, index)),
+      moved: (from: string, to: string | null) => update((prev) => moveFiles(prev, from, to)),
+      setSidebarWidth: (sidebarWidth: number) =>
+        update((prev) => ({ ...prev, sidebarWidth: Math.max(MIN_SIDEBAR, Math.round(sidebarWidth)) })),
+      toggleSidebar: () => update((prev) => ({ ...prev, sidebarHidden: !prev.sidebarHidden })),
+    }),
     [update],
   );
 
-  const closeWhere = useCallback(
-    (shouldClose: (id: string, index: number, tabs: string[]) => boolean) =>
-      update((prev) => {
-        const tabs = prev.tabs.filter((t, i) => !shouldClose(t, i, prev.tabs));
-        if (tabs.length === prev.tabs.length) return prev;
-        let active = prev.active;
-        if (active === null || !tabs.includes(active)) {
-          const index = active === null ? 0 : prev.tabs.indexOf(active);
-          const right = prev.tabs.slice(index + 1).find((t) => tabs.includes(t));
-          const left = [...prev.tabs.slice(0, index)].reverse().find((t) => tabs.includes(t));
-          active = right ?? left ?? null;
-        }
-        return { ...prev, tabs, active };
-      }),
-    [update],
-  );
-
-  const close = useCallback((id: string) => closeWhere((t) => t === id), [closeWhere]);
-  const closeOthers = useCallback((id: string) => closeWhere((t) => t !== id), [closeWhere]);
-  const closeRight = useCallback((id: string) => closeWhere((_, i, tabs) => i > tabs.indexOf(id)), [closeWhere]);
-  const closeAll = useCallback(() => closeWhere(() => true), [closeWhere]);
-
-  /** For file tabs: follow a rename (`to`) or close on delete (`to === null`). */
-  const moved = useCallback(
-    (from: string, to: string | null) =>
-      update((prev) => {
-        if (!prev.tabs.some((t) => under(t, from))) return prev;
-        if (to === null) {
-          const tabs = prev.tabs.filter((t) => !under(t, from));
-          const active = prev.active !== null && tabs.includes(prev.active) ? prev.active : (tabs[0] ?? null);
-          return { ...prev, tabs, active };
-        }
-        const rename = (t: string) => (under(t, from) ? `${to}${t.slice(from.length)}` : t);
-        return { ...prev, tabs: prev.tabs.map(rename), active: prev.active === null ? null : rename(prev.active) };
-      }),
-    [update],
-  );
-
-  const setSidebarWidth = useCallback(
-    (sidebarWidth: number) =>
-      update((prev) => ({ ...prev, sidebarWidth: Math.max(MIN_SIDEBAR, Math.round(sidebarWidth)) })),
-    [update],
-  );
-  const toggleSidebar = useCallback(
-    () => update((prev) => ({ ...prev, sidebarHidden: !prev.sidebarHidden })),
-    [update],
-  );
-
-  return { ...state, open, close, closeOthers, closeRight, closeAll, moved, setSidebarWidth, toggleSidebar };
+  return { ...state, ...actions };
 }
 
 export type Tabs = ReturnType<typeof useTabs>;
+
+export const TAB_DRAG_TYPE = "application/x-treehouse-tab";
+/** Set by the file tree when a file is dragged, so the Files tab strip can open it. */
+export const PATH_DRAG_TYPE = "application/x-treehouse-path";
+
+// The tab strip on screen, for bb commands (next tab, close tab, …). Only one
+// Treehouse view shows at a time; the most recently mounted one wins.
+const mounted: Array<{ current: Tabs }> = [];
+export function visibleTabs(): Tabs | null {
+  return mounted[mounted.length - 1]?.current ?? null;
+}
 
 /** How a tab id shows in the strip. `path` picks the icon and disambiguates equal labels. */
 export interface TabInfo {
@@ -169,6 +144,7 @@ export function TabbedLayout({
   describe,
   renderTab,
   onPopOut,
+  onPathDrop,
 }: {
   tabs: Tabs;
   sidebar: ReactNode;
@@ -176,8 +152,43 @@ export function TabbedLayout({
   describe: (id: string) => TabInfo;
   renderTab: (id: string) => ReactNode;
   onPopOut: (id: string) => void;
+  /** Accepts files dragged from the tree onto the tab area. */
+  onPathDrop?: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  useEffect(() => {
+    const entry = tabsRef;
+    mounted.push(entry);
+    return () => {
+      mounted.splice(mounted.indexOf(entry), 1);
+    };
+  }, []);
+  const [pathDrag, setPathDrag] = useState(false);
+  const dropHandlers =
+    onPathDrop === undefined
+      ? {}
+      : {
+          onDragOver: (event: React.DragEvent) => {
+            if (!event.dataTransfer.types.includes(PATH_DRAG_TYPE)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            setPathDrag(true);
+          },
+          onDragLeave: (event: React.DragEvent) => {
+            if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+              setPathDrag(false);
+            }
+          },
+          onDrop: (event: React.DragEvent) => {
+            setPathDrag(false);
+            const path = event.dataTransfer.getData(PATH_DRAG_TYPE);
+            if (path === "") return;
+            event.preventDefault();
+            onPathDrop(path);
+          },
+        };
   const hasTabs = tabs.tabs.length > 0;
   const showSidebar = !hasTabs || !tabs.sidebarHidden;
 
@@ -203,7 +214,14 @@ export function TabbedLayout({
   return (
     <div ref={containerRef} className="flex min-h-0 flex-1">
       {hasTabs ? (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          {...dropHandlers}
+          className={cn(
+            "relative flex min-h-0 min-w-0 flex-1 flex-col",
+            pathDrag &&
+              "after:pointer-events-none after:absolute after:inset-0 after:z-20 after:bg-ring/10 after:ring-2 after:ring-inset after:ring-ring/60",
+          )}
+        >
           <TabStrip tabs={tabs} describe={describe} sidebarName={sidebarName} onPopOut={onPopOut} />
           <div className="relative flex min-h-0 flex-1 flex-col">
             {tabs.tabs.map((id) => (
@@ -246,6 +264,21 @@ export function TabbedLayout({
   );
 }
 
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform);
+/** Default bindings of the tab commands registered in app.tsx; users can rebind them in bb. */
+export const TAB_SHORTCUTS = {
+  next: { key: "ArrowRight", mod: true, alt: true },
+  previous: { key: "ArrowLeft", mod: true, alt: true },
+  close: { key: "w", alt: true },
+  reopen: { key: "t", alt: true, shift: true },
+} as const;
+const TAB_SHORTCUT_HINTS = {
+  next: IS_MAC ? "⌘⌥→" : "Ctrl+Alt+→",
+  previous: IS_MAC ? "⌘⌥←" : "Ctrl+Alt+←",
+  close: IS_MAC ? "⌥W" : "Alt+W",
+  reopen: IS_MAC ? "⌥⇧T" : "Alt+Shift+T",
+};
+
 const iconButton =
   "flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -262,6 +295,26 @@ function TabStrip({
 }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const infos = useMemo(() => withHints(tabs.tabs, describe), [tabs.tabs, describe]);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const dragging = useRef<string | null>(null);
+
+  const onDragOverTab = (event: React.DragEvent<HTMLElement>, index: number) => {
+    if (dragging.current === null || !event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    setDropAt(event.clientX < rect.left + rect.width / 2 ? index : index + 1);
+  };
+  const onDrop = (event: React.DragEvent) => {
+    const id = dragging.current;
+    const at = dropAt;
+    dragging.current = null;
+    setDropAt(null);
+    if (id === null || at === null) return;
+    event.preventDefault();
+    const from = tabs.tabs.indexOf(id);
+    tabs.move(id, from < at ? at - 1 : at);
+  };
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -279,18 +332,36 @@ function TabStrip({
         role="tablist"
         aria-label="Open tabs"
         className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none]"
+        onDragLeave={(event) => {
+          if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget))
+            setDropAt(null);
+        }}
         onWheel={(event) => {
           if (event.deltaY !== 0 && stripRef.current !== null) stripRef.current.scrollLeft += event.deltaY;
         }}
       >
-        {tabs.tabs.map((id) => (
+        {tabs.tabs.map((id, index) => (
           <Tab
             key={id}
             id={id}
             info={infos.get(id) ?? { label: id, path: id, hint: "" }}
             active={id === tabs.active}
+            pinned={tabs.pinned.includes(id)}
             tabs={tabs}
             onPopOut={onPopOut}
+            dropBefore={dropAt === index}
+            dropAfter={dropAt === index + 1 && index === tabs.tabs.length - 1}
+            onDragStart={(event) => {
+              dragging.current = id;
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData(TAB_DRAG_TYPE, id);
+            }}
+            onDragEnd={() => {
+              dragging.current = null;
+              setDropAt(null);
+            }}
+            onDragOver={(event) => onDragOverTab(event, index)}
+            onDrop={onDrop}
           />
         ))}
       </div>
@@ -338,14 +409,28 @@ function Tab({
   id,
   info,
   active,
+  pinned,
   tabs,
   onPopOut,
+  dropBefore,
+  dropAfter,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
 }: {
   id: string;
   info: TabInfo & { hint: string };
   active: boolean;
+  pinned: boolean;
   tabs: Tabs;
   onPopOut: (id: string) => void;
+  dropBefore: boolean;
+  dropAfter: boolean;
+  onDragStart: (event: React.DragEvent<HTMLElement>) => void;
+  onDragEnd: () => void;
+  onDragOver: (event: React.DragEvent<HTMLElement>) => void;
+  onDrop: (event: React.DragEvent<HTMLElement>) => void;
 }) {
   const scopeProps = usePortalScopeProps();
   const index = tabs.tabs.indexOf(id);
@@ -360,6 +445,11 @@ function Tab({
           tabIndex={active ? 0 : -1}
           title={info.badge === undefined ? info.path : `${info.path} · ${info.badge}`}
           data-tab-id={id}
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onDragOver={onDragOver}
+          onDrop={onDrop}
           onClick={() => tabs.open(id)}
           onAuxClick={(event) => {
             if (event.button === 1) {
@@ -389,6 +479,8 @@ function Tab({
           )}
         >
           {active ? <span aria-hidden className="absolute inset-x-0 top-0 h-0.5 bg-foreground" /> : null}
+          {dropBefore ? <span aria-hidden className="absolute inset-y-1 -left-px w-0.5 rounded bg-ring" /> : null}
+          {dropAfter ? <span aria-hidden className="absolute inset-y-1 -right-px w-0.5 rounded bg-ring" /> : null}
           {info.icon === undefined ? (
             <FileIcon name={name} className="size-4 shrink-0" />
           ) : (
@@ -401,22 +493,38 @@ function Tab({
               {info.badge}
             </span>
           )}
-          <button
-            type="button"
-            tabIndex={-1}
-            title="Close"
-            aria-label={`Close ${info.label}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              tabs.close(id);
-            }}
-            className={cn(
-              "flex size-5 shrink-0 items-center justify-center rounded hover:bg-state-hover",
-              active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-            )}
-          >
-            <Icon name="X" className="size-3" />
-          </button>
+          {pinned ? (
+            <button
+              type="button"
+              tabIndex={-1}
+              title="Pinned. Click to unpin."
+              aria-label={`Unpin ${info.label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                tabs.pin(id, false);
+              }}
+              className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-state-hover hover:text-foreground"
+            >
+              <Icon name="Pin" fallback="Target" className="size-3" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              tabIndex={-1}
+              title="Close"
+              aria-label={`Close ${info.label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                tabs.close(id);
+              }}
+              className={cn(
+                "flex size-5 shrink-0 items-center justify-center rounded hover:bg-state-hover",
+                active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+              )}
+            >
+              <Icon name="X" className="size-3" />
+            </button>
+          )}
         </div>
       </Menu.Trigger>
       <Menu.Portal>
@@ -425,7 +533,11 @@ function Tab({
           collisionPadding={8}
           className="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
         >
-          <TabMenuItem onSelect={() => tabs.close(id)}>Close</TabMenuItem>
+          <TabMenuItem onSelect={() => tabs.pin(id, !pinned)}>{pinned ? "Unpin" : "Pin"}</TabMenuItem>
+          <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
+          <TabMenuItem shortcut={TAB_SHORTCUT_HINTS.close} onSelect={() => tabs.close(id)}>
+            Close
+          </TabMenuItem>
           <TabMenuItem disabled={tabs.tabs.length < 2} onSelect={() => tabs.closeOthers(id)}>
             Close Others
           </TabMenuItem>
@@ -433,6 +545,9 @@ function Tab({
             Close to the Right
           </TabMenuItem>
           <TabMenuItem onSelect={tabs.closeAll}>Close All</TabMenuItem>
+          <TabMenuItem disabled={tabs.closed.length === 0} shortcut={TAB_SHORTCUT_HINTS.reopen} onSelect={tabs.reopen}>
+            Reopen Closed Tab
+          </TabMenuItem>
           <Menu.Separator className="-mx-1 my-1 h-px bg-border" />
           <TabMenuItem onSelect={() => onPopOut(id)}>Open in a bb Tab</TabMenuItem>
         </Menu.Content>
@@ -443,10 +558,12 @@ function Tab({
 
 function TabMenuItem({
   disabled = false,
+  shortcut,
   onSelect,
   children,
 }: {
   disabled?: boolean;
+  shortcut?: string;
   onSelect: () => void;
   children: ReactNode;
 }) {
@@ -454,9 +571,10 @@ function TabMenuItem({
     <Menu.Item
       disabled={disabled}
       onSelect={onSelect}
-      className="flex h-8 cursor-pointer select-none items-center rounded-md px-2 outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45 data-[highlighted]:bg-state-hover"
+      className="flex h-8 cursor-pointer select-none items-center gap-6 rounded-md px-2 outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45 data-[highlighted]:bg-state-hover"
     >
-      {children}
+      <span className="flex-1">{children}</span>
+      {shortcut === undefined ? null : <span className="text-xs text-muted-foreground">{shortcut}</span>}
     </Menu.Item>
   );
 }

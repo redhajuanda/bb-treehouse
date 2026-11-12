@@ -37,7 +37,7 @@ export interface EntryActionsOptions {
   /** Shows a file in the Files tab's own preview, below the tree. */
   openFile: (path: string) => void;
   /** Called after an entry was created, renamed or duplicated so the tree can reload and reveal it. */
-  onChanged: (info: { parent: string; path: string | null; removed?: string }) => void;
+  onChanged: (info: { parent: string; path: string | null; removed?: string; oldParent?: string }) => void;
 }
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform);
@@ -92,13 +92,17 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
   const sdk = useSdk();
   const { threadId } = useBbContext();
   const [prompt, setPrompt] = useState<Prompt | null>(null);
-  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [notice, setNotice] = useState<{
+    text: string;
+    error: boolean;
+    action?: { label: string; run: () => void };
+  } | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const say = useCallback((text: string, error = false) => {
+  const say = useCallback((text: string, error = false, action?: { label: string; run: () => void }) => {
     if (noticeTimer.current !== null) clearTimeout(noticeTimer.current);
-    setNotice({ text, error });
-    noticeTimer.current = setTimeout(() => setNotice(null), error ? 8000 : 2500);
+    setNotice({ text, error, action });
+    noticeTimer.current = setTimeout(() => setNotice(null), error ? 8000 : action !== undefined ? 6000 : 2500);
   }, []);
   useEffect(
     () => () => {
@@ -233,6 +237,28 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
     [environmentId, onChanged, rpc, say],
   );
 
+  const move = useCallback(
+    async (target: EntryTarget, toDir: string, undoable = true): Promise<void> => {
+      const fromDir = parentOf(target.path);
+      if (toDir === fromDir) return;
+      try {
+        const result = await rpc.call("moveEntry", { environmentId, path: target.path, toDir });
+        onChanged({ parent: toDir, path: result.path, removed: target.path, oldParent: fromDir });
+        const where = toDir === "" ? "the workspace root" : `${toDir}/`;
+        say(
+          undoable ? `Moved ${baseName(target.path)} to ${where}` : `Moved ${baseName(target.path)} back`,
+          false,
+          undoable
+            ? { label: "Undo", run: () => void move({ path: result.path, dir: target.dir }, fromDir, false) }
+            : undefined,
+        );
+      } catch (cause) {
+        say(errorMessage(cause), true);
+      }
+    },
+    [environmentId, onChanged, rpc, say],
+  );
+
   const reveal = useCallback(
     async (target: EntryTarget) => {
       try {
@@ -347,12 +373,28 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
         <div
           role="status"
           className={cn(
-            "pointer-events-none absolute inset-x-2 bottom-2 z-10 truncate rounded-md border border-border bg-popover px-3 py-1.5 text-xs shadow-md",
+            "absolute inset-x-2 bottom-2 z-10 flex items-center gap-2 rounded-md border border-border bg-popover px-3 py-1.5 text-xs shadow-md",
+            notice.action === undefined && "pointer-events-none",
             notice.error ? "text-destructive" : "text-muted-foreground",
           )}
-          title={notice.text}
         >
-          {notice.text}
+          <span className="min-w-0 flex-1 truncate" title={notice.text}>
+            {notice.text}
+          </span>
+          {notice.action === undefined ? null : (
+            <button
+              type="button"
+              title="Put it back where it was"
+              onClick={() => {
+                const action = notice.action;
+                setNotice(null);
+                action?.run();
+              }}
+              className="shrink-0 rounded px-1.5 py-0.5 font-medium text-foreground hover:bg-state-hover"
+            >
+              {notice.action.label}
+            </button>
+          )}
         </div>
       )}
     </>
@@ -370,6 +412,7 @@ export function useEntryActions({ rpc, environmentId, rootPath, openFile, onChan
       openTerminal,
       download,
       reveal,
+      move,
       rename,
       remove,
     },

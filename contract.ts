@@ -218,6 +218,10 @@ function contractFor<T extends z.ZodRawShape>(base: T) {
       input: z.object({ ...base, path: entryPath, name: entryName }),
       output: z.object({ path: z.string() }),
     },
+    moveEntry: {
+      input: z.object({ ...base, path: entryPath, toDir: relPath }),
+      output: z.object({ path: z.string() }),
+    },
     duplicateEntry: { input: z.object({ ...base, path: entryPath }), output: z.object({ path: z.string() }) },
     deleteEntry: {
       input: z.object({ ...base, path: entryPath, permanent: z.boolean() }),

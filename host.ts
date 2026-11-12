@@ -985,6 +985,20 @@ async function renameEntry(root: string, rel: string, name: string) {
   return { path: toRel(root, to) };
 }
 
+async function moveEntry(root: string, rel: string, toDirRel: string) {
+  const from = entryTarget(root, rel);
+  const toDir = inside(root, toDirRel);
+  if (toDirRel.split(/[\\/]/u).includes(".git")) throw new Error("Treehouse does not change files inside .git.");
+  if (!(await fs.stat(toDir)).isDirectory()) throw new Error(`${toDirRel} is not a folder.`);
+  if (toDir === from || toDir.startsWith(from + path.sep)) throw new Error("A folder can't be moved into itself.");
+  const name = path.basename(from);
+  const to = path.join(toDir, name);
+  if (to === from) return { path: rel };
+  if (await exists(to)) throw new Error(`${toDirRel === "" ? "The workspace root" : toDirRel} already has ${name}.`);
+  await moveAcross(from, to);
+  return { path: toRel(root, to) };
+}
+
 export function duplicateName(name: string, dir: boolean, n: number): string {
   const suffix = n === 1 ? " copy" : ` copy ${n}`;
   const dot = dir ? -1 : name.lastIndexOf(".");
@@ -1267,6 +1281,10 @@ export default experimental_defineHostEntry({
     renameEntry: ({ root, path: rel, name }) => {
       invalidate(root);
       return renameEntry(root, rel, name);
+    },
+    moveEntry: ({ root, path: rel, toDir }) => {
+      invalidate(root);
+      return moveEntry(root, rel, toDir);
     },
     duplicateEntry: ({ root, path: rel }) => {
       invalidate(root);

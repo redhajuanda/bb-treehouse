@@ -5,6 +5,12 @@ import { cn } from "@/lib/utils";
 import { VirtualList } from "./VirtualList";
 import { FileIcon } from "./FileIcon";
 import { EntryContextMenu, useEntryActions, type EntryTarget } from "./EntryMenu";
+import { PATH_DRAG_TYPE } from "./FileTabs";
+
+function parentOfPath(rel: string): string {
+  const slash = rel.lastIndexOf("/");
+  return slash === -1 ? "" : rel.slice(0, slash);
+}
 import { badgeClass, errorMessage, type Badge, type BadgeIndex, type Rpc, useCachedState } from "./data";
 
 const TREE_ROW_HEIGHT = 28;
@@ -144,8 +150,19 @@ export function NamesView({
   const open = onOpenFile;
 
   const onChanged = useCallback(
-    ({ parent, path, removed }: { parent: string; path: string | null; removed?: string }) => {
+    ({
+      parent,
+      path,
+      removed,
+      oldParent,
+    }: {
+      parent: string;
+      path: string | null;
+      removed?: string;
+      oldParent?: string;
+    }) => {
       void load(parent);
+      if (oldParent !== undefined && oldParent !== parent) void load(oldParent);
       setExpanded((prev) => {
         const next = new Set(prev);
         if (removed !== undefined) {
@@ -177,8 +194,89 @@ export function NamesView({
     [handleKey],
   );
   const fallback = useMemo<EntryTarget>(() => ({ path: base, dir: true }), [base]);
+
+  // Drag and drop: drag a row onto a folder (or a file in it, or empty space
+  // for the root) to move it there. Files also carry PATH_DRAG_TYPE so the
+  // Files tab strip can open them.
+  const dragged = useRef<EntryTarget | null>(null);
+  const [dropDir, setDropDir] = useState<string | null>(null);
+  const expandTimer = useRef<{ dir: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const clearExpandTimer = () => {
+    if (expandTimer.current !== null) clearTimeout(expandTimer.current.timer);
+    expandTimer.current = null;
+  };
+  const dropTargetFor = (target: EventTarget | null): { dir: string; row: HTMLElement | null } => {
+    const row = target instanceof Element ? target.closest<HTMLElement>("[data-entry-path]") : null;
+    if (row === null) return { dir: base, row: null };
+    const path = row.dataset.entryPath ?? "";
+    return { dir: row.dataset.entryDir === "true" ? path : parentOfPath(path), row };
+  };
+  const canDrop = (source: EntryTarget, dir: string) =>
+    dir !== parentOfPath(source.path) && dir !== source.path && !dir.startsWith(`${source.path}/`);
+  const dragHandlers = {
+    onDragStart: (event: React.DragEvent) => {
+      const row = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-entry-path]") : null;
+      if (row === null) return;
+      const source = { path: row.dataset.entryPath ?? "", dir: row.dataset.entryDir === "true" };
+      dragged.current = source;
+      event.dataTransfer.effectAllowed = "copyMove";
+      event.dataTransfer.setData("text/plain", source.path);
+      if (!source.dir) event.dataTransfer.setData(PATH_DRAG_TYPE, source.path);
+    },
+    onDragEnd: () => {
+      dragged.current = null;
+      setDropDir(null);
+      clearExpandTimer();
+    },
+    onDragOver: (event: React.DragEvent) => {
+      const source = dragged.current;
+      if (source === null) return;
+      const { dir, row } = dropTargetFor(event.target);
+      if (!canDrop(source, dir)) {
+        setDropDir(null);
+        clearExpandTimer();
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setDropDir(dir);
+      const hoveredDir = row?.dataset.entryDir === "true" ? (row.dataset.entryPath ?? null) : null;
+      if (hoveredDir !== null && !expanded.has(hoveredDir)) {
+        if (expandTimer.current?.dir !== hoveredDir) {
+          clearExpandTimer();
+          expandTimer.current = { dir: hoveredDir, timer: setTimeout(() => toggle(hoveredDir), 650) };
+        }
+      } else {
+        clearExpandTimer();
+      }
+    },
+    onDragLeave: (event: React.DragEvent) => {
+      if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+        setDropDir(null);
+        clearExpandTimer();
+      }
+    },
+    onDrop: (event: React.DragEvent) => {
+      const source = dragged.current;
+      dragged.current = null;
+      setDropDir(null);
+      clearExpandTimer();
+      if (source === null) return;
+      const { dir } = dropTargetFor(event.target);
+      if (!canDrop(source, dir)) return;
+      event.preventDefault();
+      void actions.move(source, dir);
+    },
+  };
+
   const withMenu = (content: ReactNode) => (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div
+      {...dragHandlers}
+      className={cn(
+        "relative flex min-h-0 flex-1 flex-col",
+        dropDir === base && "bg-ring/5 ring-2 ring-inset ring-ring/50",
+      )}
+    >
       <EntryContextMenu environmentId={environmentId} actions={actions} fallback={fallback}>
         {content}
       </EntryContextMenu>
@@ -267,6 +365,7 @@ export function NamesView({
           onOpen={open}
           onKey={onRowKey}
           selected={!row.dir && selectedPath === row.path}
+          dropTarget={row.dir && dropDir === row.path}
           focus={focusPath === row.path}
           onFocused={() => setFocusPath(null)}
         />
@@ -282,6 +381,7 @@ const TreeRow = memo(function TreeRow({
   onOpen,
   onKey,
   selected,
+  dropTarget,
   focus,
   onFocused,
 }: {
@@ -291,6 +391,7 @@ const TreeRow = memo(function TreeRow({
   onOpen: (path: string) => void;
   onKey: (event: KeyboardEvent, target: EntryTarget) => void;
   selected: boolean;
+  dropTarget: boolean;
   focus: boolean;
   onFocused: () => void;
 }) {
@@ -309,11 +410,13 @@ const TreeRow = memo(function TreeRow({
       title={row.path}
       data-entry-path={row.path}
       data-entry-dir={row.dir}
+      draggable
       onKeyDown={(event) => onKey(event, { path: row.path, dir: row.dir })}
       onClick={() => (row.dir ? onToggle(row.path) : onOpen(row.path))}
       className={cn(
         "relative flex h-full w-full items-center gap-1.5 rounded-md pr-3 text-left text-sm hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none",
         selected && "bg-state-active hover:bg-state-active",
+        dropTarget && "bg-ring/15 ring-1 ring-inset ring-ring/60 hover:bg-ring/15",
         row.ignored && "opacity-55",
       )}
       style={{ paddingLeft: 6 + row.depth * INDENT }}

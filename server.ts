@@ -204,6 +204,9 @@ export default async function plugin(bb: BbPluginApi) {
     renameEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
       host.call("renameEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),
+    moveEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
+      host.call("moveEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
+    ),
     duplicateEntry: mutation(({ hostId, root }, { environmentId: _, ...input }) =>
       host.call("duplicateEntry", { root, ...input }, { hostId, timeoutMs: WRITE_TIMEOUT_MS }),
     ),

@@ -14,7 +14,15 @@ import { GraphView } from "./ui/GraphView";
 import { FolderPicker, type FolderOption } from "./ui/FolderPicker";
 import { NamesView } from "./ui/NamesView";
 import { TOOLTIP_ROOT_ATTRIBUTE, Tooltips } from "./ui/Tooltips";
-import { FileTabBody, TabbedLayout, describeFile, useTabs, type TabInfo } from "./ui/FileTabs";
+import {
+  FileTabBody,
+  TAB_SHORTCUTS,
+  TabbedLayout,
+  describeFile,
+  useTabs,
+  visibleTabs,
+  type TabInfo,
+} from "./ui/FileTabs";
 import {
   DIFF_TAB_REFERENCE,
   CommitView,
@@ -320,6 +328,7 @@ function Treehouse({ environmentId }: { environmentId: string }) {
           describe={describeFile}
           renderTab={renderFileTab}
           onPopOut={popOut}
+          onPathDrop={files.open}
           sidebar={
             <>
               {fileOptions.length > 1 ? (
@@ -488,6 +497,36 @@ export default definePluginApp((app) => {
     layout: "flush",
     component: NewThreadTreehouse,
   });
+  const tabCommands = [
+    { id: "next-tab", title: "Treehouse: next tab", shortcut: TAB_SHORTCUTS.next, run: () => visibleTabs()?.next() },
+    {
+      id: "previous-tab",
+      title: "Treehouse: previous tab",
+      shortcut: TAB_SHORTCUTS.previous,
+      run: () => visibleTabs()?.previous(),
+    },
+    {
+      id: "close-tab",
+      title: "Treehouse: close tab",
+      shortcut: TAB_SHORTCUTS.close,
+      run: () => visibleTabs()?.closeActive(),
+    },
+    {
+      id: "reopen-tab",
+      title: "Treehouse: reopen closed tab",
+      shortcut: TAB_SHORTCUTS.reopen,
+      run: () => visibleTabs()?.reopen(),
+    },
+  ];
+  for (const command of tabCommands) {
+    app.commands.register({
+      id: command.id,
+      title: command.title,
+      defaultShortcut: command.shortcut,
+      isAvailable: () => visibleTabs() !== null,
+      run: command.run,
+    });
+  }
   app.commands.register({
     id: "toggle-files",
     title: "Treehouse: toggle files",
