@@ -5,7 +5,7 @@ description: Read a bb environment's file tree and git changes with the Treehous
 
 # Treehouse
 
-Treehouse adds a **Files** tab (Names | Git) to each thread's side panel.
+Treehouse adds a **Files** tab to each thread's side panel, with three views: **Files** (file tree and editor), **Diff** (per-repository changes, commits, branch compare and PRs) and **Graph** (commit history).
 
 ## CLI
 
@@ -14,4 +14,4 @@ Treehouse adds a **Files** tab (Names | Git) to each thread's side panel.
 
 Get the environment id from `bb status` inside a thread.
 
-The CLI only reads. Staging, discarding, committing, pushing and pulling are done in the Git view of the tab.
+The CLI only reads. Staging, discarding, committing, pushing and pulling are done in the Diff view of the tab.
